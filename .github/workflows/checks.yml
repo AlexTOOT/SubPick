@@ -24,6 +24,8 @@ jobs:
       - name: Lint
         run: uv run --frozen --extra dev ruff check src tests
       - name: Test
-        run: uv run --frozen --extra dev python -m pytest -q -p no:cacheprovider --basetemp .tmp/pytest-ci
+        run: |
+          mkdir -p .tmp
+          uv run --frozen --extra dev python -m pytest -q -p no:cacheprovider --basetemp .tmp/pytest-ci
       - name: Build Docker image
         run: docker build --tag subpick:ci .
