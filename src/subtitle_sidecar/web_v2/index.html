@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#003c33">
+    <title>拾幕</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/web/styles.css">
+  </head>
+  <body>
+    <div id="splash" class="splash" aria-label="拾幕正在启动">
+      <div class="splash-lockup">
+        <div class="brand-symbol large splash-symbol" aria-hidden="true">
+          <span class="video-frame"><i></i></span>
+          <span class="subtitle-lines"><i></i><i></i><i></i></span>
+          <span class="check-mark"></span>
+        </div>
+        <strong>拾幕</strong>
+        <span class="splash-slogan">让每一部影片，都有合适的字幕</span>
+        <span class="splash-status"><i></i>正在连接媒体库与字幕源</span>
+      </div>
+      <span class="splash-timeline" aria-hidden="true"><i></i><i></i></span>
+    </div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-symbol" aria-hidden="true">
+            <span class="video-frame"><i></i></span>
+            <span class="subtitle-lines"><i></i><i></i><i></i></span>
+            <span class="check-mark"></span>
+          </div>
+          <div><strong>拾幕</strong><span>SUBTITLE SIDECAR</span></div>
+        </div>
+        <nav aria-label="主导航">
+          <span class="nav-caption">工作区</span>
+          <button class="nav-item active" data-view="overview" type="button"><b>总</b>运行概览</button>
+          <button class="nav-item" data-view="tasks" type="button"><b>任</b>任务工作台</button>
+          <button class="nav-item" data-view="library" type="button"><b>库</b>媒体库</button>
+          <span class="nav-caption">状态</span>
+          <button class="nav-item" data-view="logs" type="button"><b>志</b>实时日志</button>
+          <button class="nav-item" data-view="diagnostics" type="button"><b>诊</b>诊断信息</button>
+          <button class="nav-item" data-view="settings" type="button"><b>设</b>设置</button>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="sidebar-health-dot" class="dot unknown"></span>
+          <span id="sidebar-health">正在连接服务</span>
+        </div>
+      </aside>
+
+      <div class="main-shell">
+        <header class="topbar">
+          <div>
+            <h1 id="page-title">运行概览</h1>
+            <p id="page-subtitle">让每一部影片，都有合适的字幕</p>
+          </div>
+          <div class="top-actions">
+            <span id="queue-chip" class="chip">队列 --</span>
+            <span id="provider-chip" class="chip">Provider --</span>
+            <button id="global-refresh" class="icon-button" type="button" title="刷新当前页面" aria-label="刷新当前页面">↻</button>
+          </div>
+        </header>
+
+        <main>
+          <p id="toast" class="toast" role="status" aria-live="polite"></p>
+
+          <section id="view-overview" class="view active" aria-labelledby="overview-title">
+            <div class="overview-strip">
+              <div><span>当前任务</span><strong id="metric-active">--</strong><small>正在处理</small></div>
+              <div><span>等待队列</span><strong id="metric-queued">--</strong><small>个任务</small></div>
+              <div><span>下个搜索槽位</span><strong id="metric-interval">--</strong><small>秒</small></div>
+              <div><span>可用来源</span><strong id="metric-providers">--</strong><small>个 Provider</small></div>
+              <button class="light-button" data-go="tasks" type="button">管理任务</button>
+            </div>
+
+            <div class="overview-grid">
+              <section class="panel span-2">
+                <div class="panel-heading"><div><h2 id="overview-title">近期任务</h2><p>最新入队与下载结果</p></div><button class="text-button" data-go="tasks" type="button">查看全部 →</button></div>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>任务</th><th>媒体文件</th><th>状态</th><th>更新时间</th></tr></thead>
+                    <tbody id="recent-jobs"><tr><td colspan="4" class="empty">正在加载任务</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><div><h2>服务状态</h2><p>当前运行环境</p></div></div>
+                <div id="service-status" class="status-list"></div>
+              </section>
+            </div>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <div><h2>最近媒体</h2><p>按 Jellyfin 入库时间排列，覆盖所有媒体库</p></div>
+                <button class="text-button" data-go="library" type="button">浏览媒体库 →</button>
+              </div>
+              <div id="overview-media" class="poster-row"><p class="empty">正在加载媒体库</p></div>
+            </section>
+          </section>
+
+          <section id="view-tasks" class="view" aria-labelledby="tasks-title">
+            <div class="view-heading">
+              <div><h2 id="tasks-title">任务工作台</h2><p>搜索、筛选、批量操作与候选排查</p></div>
+              <div class="actions">
+                <button id="task-batch-retry" type="button" disabled>批量重试</button>
+                <button id="task-batch-delete" class="danger" type="button" disabled>批量删除</button>
+                <button id="task-delete-all" class="danger ghost" type="button">删除全部任务</button>
+              </div>
+            </div>
+            <section class="panel">
+              <div class="toolbar">
+                <input id="task-search" type="search" placeholder="搜索路径、标题、任务 ID">
+                <div class="segmented" aria-label="任务状态">
+                  <button class="active" data-task-status="all" type="button">全部</button>
+                  <button data-task-status="failed" type="button">失败</button>
+                  <button data-task-status="active" type="button">处理中</button>
+                  <button data-task-status="completed" type="button">已完成</button>
+                </div>
+                <label>每页
+                  <select id="task-page-size"><option>20</option><option selected>50</option><option>100</option><option>200</option></select>
+                </label>
+              </div>
+              <div class="table-wrap task-table-wrap">
+                <table class="task-table">
+                  <thead><tr><th><input id="task-select-all" type="checkbox" aria-label="选择本页全部任务"></th><th>任务</th><th>状态</th><th>媒体文件</th><th>更新</th></tr></thead>
+                  <tbody id="task-rows"><tr><td colspan="5" class="empty">正在加载任务</td></tr></tbody>
+                </table>
+              </div>
+              <div class="pagination">
+                <span id="task-page-summary">--</span>
+                <div><button id="task-prev" type="button">上一页</button><button id="task-next" type="button">下一页</button></div>
+              </div>
+            </section>
+          </section>
+
+          <section id="view-library" class="view" aria-labelledby="library-title">
+            <div class="view-heading">
+              <div><h2 id="library-title">媒体库</h2><p>查看字幕覆盖状态并按需创建任务</p></div>
+              <div class="actions">
+                <button id="library-scan" type="button" disabled>扫描当前库</button>
+                <button id="library-ignore" type="button" disabled>忽略选中</button>
+                <button id="library-unignore" type="button" disabled>取消忽略</button>
+                <button id="library-add" class="primary" type="button" disabled>添加选中任务</button>
+              </div>
+            </div>
+            <div id="library-tabs" class="library-tabs"></div>
+            <section class="panel">
+              <div class="toolbar">
+                <input id="media-search" type="search" placeholder="搜索标题或年份">
+                <div class="segmented" aria-label="字幕状态">
+                  <button class="active" data-media-status="all" type="button">全部</button>
+                  <button data-media-status="has_chinese" type="button">已有</button>
+                  <button data-media-status="partial" type="button">部分缺失</button>
+                  <button data-media-status="missing" type="button">无字幕</button>
+                  <button data-media-status="ignored" type="button">已忽略</button>
+                </div>
+                <div class="sort-controls" aria-label="媒体排序">
+                  <label>排序
+                    <select id="media-sort">
+                      <option value="date_created" selected>入库时间</option>
+                      <option value="name">影片名称</option>
+                      <option value="year">影片年份</option>
+                    </select>
+                  </label>
+                  <label>顺序
+                    <select id="media-sort-direction">
+                      <option value="desc" selected>倒序</option>
+                      <option value="asc">正序</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div id="media-grid" class="media-grid"><p class="empty">正在加载媒体库</p></div>
+            </section>
+          </section>
+
+          <section id="view-logs" class="view" aria-labelledby="logs-title">
+            <div class="view-heading">
+              <div><h2 id="logs-title">实时日志</h2><p>仅在本页打开时建立 SSE 实时连接</p></div>
+              <div class="actions"><button id="logs-pause" type="button">暂停</button><button id="logs-clear" type="button">清空显示</button></div>
+            </div>
+            <section class="panel logs-panel">
+              <div class="toolbar">
+                <label>级别<select id="log-level"><option value="">全部级别</option><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
+                <label>任务<input id="log-task" inputmode="numeric" placeholder="任务 ID"></label>
+                <label>Provider<select id="log-provider"><option value="">全部 Provider</option></select></label>
+              </div>
+              <div class="table-wrap">
+                <table class="log-table"><thead><tr><th>时间</th><th>级别</th><th>阶段</th><th>任务</th><th>Provider</th><th>消息</th></tr></thead><tbody id="log-rows"></tbody></table>
+              </div>
+            </section>
+          </section>
+
+          <section id="view-diagnostics" class="view" aria-labelledby="diag-title">
+            <div class="view-heading">
+              <div><h2 id="diag-title">诊断信息</h2><p>版本、依赖、工具与运行状态</p></div>
+              <div class="actions"><button id="diag-updates" type="button">检查组件更新</button><button id="diag-export" type="button">导出诊断</button></div>
+            </div>
+            <div id="diagnostic-grid" class="diagnostic-grid"><p class="empty">正在读取诊断信息</p></div>
+          </section>
+
+          <section id="view-settings" class="view" aria-labelledby="settings-title">
+            <div class="view-heading"><div><h2 id="settings-title">设置</h2><p>连接 Jellyfin，管理字幕来源的顺序与配置</p></div></div>
+            <div class="settings-grid">
+              <form id="jellyfin-form" class="panel settings-card">
+                <div class="panel-heading"><div><h2>Jellyfin 配置</h2><p>用于媒体库、海报和入库信息</p></div></div>
+                <label>Jellyfin 地址<input id="jellyfin-url" type="url" placeholder="http://jellyfin:8096"></label>
+                <label>API Key<input id="jellyfin-key" type="password" autocomplete="off" placeholder="留空表示保留现有值"></label>
+                <p id="jellyfin-key-status" class="settings-note"></p>
+                <label>User ID<input id="jellyfin-user" type="text"></label>
+                <div class="form-actions"><button class="primary" type="submit">保存 Jellyfin 配置</button></div>
+              </form>
+
+              <form id="github-form" class="panel settings-card">
+                <div class="panel-heading"><div><h2>系统与更新</h2><p>管理 MoviePilot 通信鉴权与组件更新凭据</p></div></div>
+                <label>MoviePilot API Token
+                  <span class="field-with-action">
+                    <input id="server-token" type="text" autocomplete="off" spellcheck="false">
+                    <button id="server-token-generate" type="button">随机生成</button>
+                  </span>
+                </label>
+                <p class="settings-note">填写后 MoviePilot 插件请求必须携带相同 Token；留空则不鉴权。</p>
+                <label>GitHub API Token<input id="github-key" type="password" autocomplete="off" placeholder="可选，留空表示保留现有值"></label>
+                <p id="github-key-status" class="settings-note">仅用于查询 GitHub Release，不会上传媒体信息。</p>
+                <div class="form-actions"><button class="primary" type="submit">保存系统配置</button></div>
+              </form>
+
+              <section class="panel settings-card settings-span-all">
+                <div class="panel-heading">
+                  <div><h2>Provider</h2><p>拖拽调整搜索顺序，点击卡片展开认证与高级设置</p></div>
+                  <button id="provider-order-save" class="primary" type="button">保存顺序</button>
+                </div>
+                <ol id="settings-provider-order" class="provider-order-list"></ol>
+                <p id="settings-status" class="settings-note" role="status"></p>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <aside id="detail-drawer" class="drawer" aria-hidden="true" aria-label="详情">
+      <header><div><span id="drawer-eyebrow">详情</span><h2 id="drawer-title">未选择</h2></div><button id="drawer-close" class="icon-button" type="button" aria-label="关闭详情">×</button></header>
+      <div id="drawer-content" class="drawer-content"></div>
+    </aside>
+
+    <div id="confirm-dialog" class="dialog-layer" hidden>
+      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h2 id="confirm-title">确认操作</h2>
+        <p id="confirm-message"></p>
+        <div class="dialog-actions">
+          <button id="confirm-cancel" type="button">取消</button>
+          <button id="confirm-tasks" type="button">仅删除任务</button>
+          <button id="confirm-all" class="danger" type="button">删除任务 + 字幕</button>
+        </div>
+      </section>
+    </div>
+    <script src="/web/app.js"></script>
+  </body>
+</html>

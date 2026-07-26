@@ -1,0 +1,220 @@
+import asyncio
+
+from subtitle_sidecar.db.repository import JobCreate, Repository
+from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
+from subtitle_sidecar.queue import TaskQueue
+
+
+def _create_task(engine, path: str) -> int:
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        job = repo.create_job(
+            JobCreate(
+                source="test",
+                raw_payload={"physical_video_file_full_path": path},
+                video_path_original=path,
+            )
+        )
+        return job.video_tasks[0].id
+
+
+def test_task_queue_processes_tasks_serially_and_waits_between_items(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    first_task_id = _create_task(engine, "/media/A.mkv")
+    second_task_id = _create_task(engine, "/media/B.mkv")
+
+    calls: list[int] = []
+    sleeps: list[float] = []
+    running = 0
+    max_running = 0
+
+    def processor(task_id: int) -> None:
+        nonlocal running, max_running
+        running += 1
+        max_running = max(max_running, running)
+        calls.append(task_id)
+        with session_scope(engine) as session:
+            Repository(session).update_video_task_status(task_id, "completed")
+        running -= 1
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processor,
+            interval_seconds=12.5,
+            sleep=fake_sleep,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(first_task_id)
+        queue.enqueue(second_task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert calls == [first_task_id, second_task_id]
+    assert max_running == 1
+    assert sleeps == [12.5]
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        assert repo.list_task_events(first_task_id) == []
+        assert repo.list_task_events(second_task_id) == []
+
+
+def test_task_queue_records_only_failed_event_when_processor_raises(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    task_id = _create_task(engine, "/media/failed.mkv")
+
+    def processor(processed_task_id: int) -> None:
+        assert processed_task_id == task_id
+        raise RuntimeError("processor failed")
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processor,
+            interval_seconds=0,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        task = repo.get_video_task(task_id)
+        events = repo.list_task_events(task_id)
+
+    assert task is not None
+    assert task.status == "failed"
+    assert task.error_message == "processor failed"
+    assert len(events) == 1
+    assert events[0].stage == "queue"
+    assert events[0].status == "failed"
+    assert events[0].message == "processor failed"
+    assert events[0].error_code == "processor failed"
+    assert events[0].details_json["duration_ms"] >= 0
+
+
+def test_task_queue_prioritizes_cached_subtitle_tasks_without_waiting(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    network_task_id = _create_task(engine, "/media/network.mkv")
+    cached_task_id = _create_task(engine, "/media/cached.mkv")
+    processed: list[int] = []
+    sleeps: list[float] = []
+
+    def processor(task_id: int) -> None:
+        processed.append(task_id)
+
+    def cache_probe(task_id: int) -> bool:
+        return task_id == cached_task_id
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processor,
+            interval_seconds=30,
+            cache_probe=cache_probe,
+            sleep=fake_sleep,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(network_task_id)
+        queue.enqueue(cached_task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert processed == [cached_task_id, network_task_id]
+    assert sleeps == []
+
+
+def test_task_queue_preflights_local_checks_before_provider_queue(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    local_task_id = _create_task(engine, "/media/local.mkv")
+    provider_task_id = _create_task(engine, "/media/provider.mkv")
+    preflighted: list[int] = []
+    processed: list[int] = []
+
+    def preflight(task_id: int) -> bool:
+        preflighted.append(task_id)
+        return task_id == provider_task_id
+
+    def processor(task_id: int) -> None:
+        processed.append(task_id)
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processor,
+            preflight_processor=preflight,
+            interval_seconds=30,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(local_task_id)
+        queue.enqueue(provider_task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert preflighted == [local_task_id, provider_task_id]
+    assert processed == [provider_task_id]
+
+
+def test_task_queue_recovers_queued_tasks_and_marks_stale_running_interrupted(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    queued_task_id = _create_task(engine, "/media/queued.mkv")
+    running_task_id = _create_task(engine, "/media/running.mkv")
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        repo.update_video_task_status(running_task_id, "running")
+
+    calls: list[int] = []
+
+    def processor(task_id: int) -> None:
+        calls.append(task_id)
+        with session_scope(engine) as session:
+            Repository(session).update_video_task_status(task_id, "completed")
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processor,
+            interval_seconds=0,
+        )
+        await queue.start(recover=True)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        queued_task = repo.get_video_task(queued_task_id)
+        running_task = repo.get_video_task(running_task_id)
+        running_events = repo.list_task_events(running_task_id)
+
+    assert calls == [queued_task_id]
+    assert queued_task is not None
+    assert queued_task.status == "completed"
+    assert running_task is not None
+    assert running_task.status == "interrupted"
+    assert running_task.error_message == "interrupted_by_restart"
+    assert [(event.stage, event.status, event.error_code) for event in running_events] == [
+        ("queue", "interrupted", "interrupted_by_restart")
+    ]

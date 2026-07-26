@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitle-sidecar"
+version = "0.5.0"
+description = "SubPick: a lightweight MoviePilot subtitle sidecar"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "sqlalchemy>=2.0.0",
+  "httpx>=0.27.0",
+  "beautifulsoup4>=4.12.0",
+  "Pillow>=11.0.0",
+  "PyYAML>=6.0.0",
+  "subliminal==2.6.0",
+  "ffsubsync>=0.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AlexTOOT/SubPick"
+Repository = "https://github.com/AlexTOOT/SubPick"
+Issues = "https://github.com/AlexTOOT/SubPick/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-cov>=5.0.0",
+  "ruff>=0.5.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.setuptools.package-data]
+subtitle_sidecar = [
+  "web_v2/*.html",
+  "web_v2/*.js",
+  "web_v2/*.css",
+  "web_v2/*.png",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

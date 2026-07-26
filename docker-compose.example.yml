@@ -1,0 +1,23 @@
+services:
+  subpick:
+    image: ${SUBPICK_IMAGE:-ghcr.io/alextoot/subpick:latest}
+    container_name: subpick
+    ports:
+      - "19035:19035"
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - ./cache:/cache
+      - ${MEDIA_PATH:-/volume1/media}:/media
+    environment:
+      TZ: Asia/Shanghai
+    depends_on:
+      - moviepilot-ocr
+    restart: unless-stopped
+
+  moviepilot-ocr:
+    image: jxxghp/moviepilot-ocr:latest
+    container_name: moviepilot-ocr
+    ports:
+      - "19899:9899"
+    restart: unless-stopped

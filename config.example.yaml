@@ -1,0 +1,99 @@
+data_dir: /data
+
+server:
+  host: 0.0.0.0
+  port: 19035
+  # Protects the MoviePilot /api/v1/add-job callback; Web UI endpoints stay open.
+  token: ""
+
+paths:
+  mappings:
+    - from: /moviepilot/media
+      to: /media
+
+subtitles:
+  preferred: bilingual
+  fallback:
+    - zh-cn
+    - zh-hant
+  overwrite: false
+  save_unsynced_on_sync_failure: false
+  max_candidate_attempts: 4
+
+queue:
+  # Conservative default for public subtitle providers; can be changed in YAML/env.
+  search_interval_seconds: 60
+  recover_interrupted_tasks: true
+
+jellyfin:
+  # Optional defaults; these can also be saved from the Web UI settings panel.
+  server_url: ""
+  api_key: ""
+  user_id: ""
+
+providers:
+  subdl:
+    enabled: false
+    # Register: https://subdl.com/register
+    # Obtain API Key: https://subdl.com/panel/api
+    api_key: ""
+    timeout_seconds: 15
+    requests_per_minute: 20
+    # Enable only for a SubDL Pro key. Free keys use official anonymous downloads.
+    use_api_key_for_downloads: false
+  assrt:
+    enabled: false
+    # Register: https://assrt.net/user/register.xml
+    # Obtain API Key: https://secure.assrt.net/usercp.php
+    token: ""
+    timeout_seconds: 15
+    # ASSRT's effective quota is five API requests per minute.
+    requests_per_minute: 5
+  zimuku:
+    enabled: false
+    base_url: "https://srtku.com"
+    # The bundled Compose service provides this MoviePilot-OCR-compatible endpoint.
+    moviepilot_ocr_url: "http://moviepilot-ocr:9899"
+    # Optional paid fallback when local OCR cannot recognize a challenge.
+    anti_captcha_api_key: ""
+    # Development diagnostics are stored under /data/diagnostics/captcha/zimuku.
+    captcha_debug_capture: false
+    timeout_seconds: 30
+    request_delay_seconds: 1
+  subliminal:
+    enabled: true
+    providers:
+      - opensubtitles
+      - opensubtitlescom
+    # The values below may instead be saved through the Web UI API.
+    languages:
+      - zh-cn
+      - zh-hant
+    authentication:
+      addic7ed:
+        username: ""
+        password: ""
+      opensubtitles:
+        username: ""
+        password: ""
+      opensubtitlescom:
+        username: ""
+        password: ""
+        apikey: ""
+
+probe:
+  ffprobe_path: ffprobe
+  mkvmerge_path: mkvmerge
+  use_mkvmerge_when_available: true
+
+sync:
+  enabled: true
+  mode: conservative
+  keep_backup: true
+
+ai:
+  enabled: false
+  provider: ""
+  model: ""
+  api_base: ""
+  api_key: ""

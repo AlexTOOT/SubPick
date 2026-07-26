@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全问题
+    url: https://github.com/AlexTOOT/SubPick/security/advisories/new
+    about: 请私下报告凭据泄露、任意文件访问或远程代码执行问题
