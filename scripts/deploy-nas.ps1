@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$HostName,
     [Parameter(Mandatory = $true)][string]$User,
     [Parameter(Mandatory = $true)][string]$RemotePath,
+    [Parameter(Mandatory = $true)][string]$MediaPath,
     [string]$IdentityFile = "",
     [int]$Port = 22,
     [string]$ComposeService = "subpick",
@@ -10,7 +11,7 @@ param(
 
 . "$PSScriptRoot\common.ps1"
 
-foreach ($value in @($HostName, $User, $RemotePath, $ComposeService, $HealthUrl)) {
+foreach ($value in @($HostName, $User, $RemotePath, $MediaPath, $ComposeService, $HealthUrl)) {
     if ($value -notmatch "^[A-Za-z0-9_./:-]+$") {
         throw "Unsafe deployment parameter: $value"
     }
@@ -70,6 +71,7 @@ test -f "$STAGE/uv.lock"
 test -f "$STAGE/Dockerfile"
 docker build -t "ghcr.io/alextoot/subpick:__COMMIT__" "$STAGE"
 cp "$STAGE/compose.yaml" "$ROOT/compose.yaml"
+sed -i "s|/volume1/media:/media|__MEDIA_PATH__:/media|" "$ROOT/compose.yaml"
 
 ROLLBACK_IMAGE="ghcr.io/alextoot/subpick:rollback-__COMMIT__"
 HAS_ROLLBACK=0
@@ -123,6 +125,7 @@ exit 1
 '@
 $remoteScript = $remoteScript.Replace("__ROOT__", $RemotePath)
 $remoteScript = $remoteScript.Replace("__COMMIT__", $commit)
+$remoteScript = $remoteScript.Replace("__MEDIA_PATH__", $MediaPath)
 $remoteScript = $remoteScript.Replace("__SERVICE__", $ComposeService)
 $remoteScript = $remoteScript.Replace("__HEALTH__", $HealthUrl)
 
