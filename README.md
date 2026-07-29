@@ -106,7 +106,8 @@ Provider 设置中执行一次 OCR 实图测试；仅能打开 OCR 根地址不�
 - `cache/`：海报、整季字幕包等可重建缓存
 
 WebUI 的“设置 → 系统与更新”可以导出或导入运行配置。完整备份建议同时保存
-`config.yaml` 与 `data/`。
+`config.yaml` 与 `data/`。导出的配置包含已保存的 API Key 和 Token，请像密码一样
+妥善保管，不要上传到公开仓库或发送给他人。
 
 更新：
 
@@ -116,7 +117,7 @@ docker compose up -d
 ```
 
 回滚时，把 Compose 中的镜像标签从 `latest` 改为指定版本，例如
-`ghcr.io/alextoot/subpick:0.5.0`，再重新创建容器。不要在运行中的容器内单独
+`ghcr.io/alextoot/subpick:0.6.0`，再重新创建容器。不要在运行中的容器内单独
 升级 Subliminal、ffsubsync 或其他 Python 依赖，它们会随拾幕主镜像统一发布。
 
 ## 开发
