@@ -128,6 +128,7 @@ $remoteScript = $remoteScript.Replace("__COMMIT__", $commit)
 $remoteScript = $remoteScript.Replace("__MEDIA_PATH__", $MediaPath)
 $remoteScript = $remoteScript.Replace("__SERVICE__", $ComposeService)
 $remoteScript = $remoteScript.Replace("__HEALTH__", $HealthUrl)
+$remoteScript = $remoteScript.Replace("`r", "")
 
 Invoke-Checked $ssh ($sshArguments + @($target, $remoteScript))
 Write-Host "Deployed commit $commit to ${target}:$RemotePath"
