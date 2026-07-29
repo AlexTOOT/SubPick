@@ -49,10 +49,13 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "setInterval" not in js
     assert "/api/v1/diagnostics" in js
     assert "/api/v1/diagnostics/export" in js
+    assert "/api/v1/settings/export" in js
+    assert "/api/v1/settings/import" in js
     assert "/api/v1/jobs" in js
     assert "/api/v1/tasks/batch-retry" in js
     assert "/api/v1/tasks/batch-delete" in js
     assert "/api/v1/jellyfin/libraries" in js
+    assert "/api/v1/jellyfin/check" in js
     assert "/api/v1/jellyfin/recent" in js
     assert "/api/v1/jellyfin/tasks" in js
     assert "/api/v1/jellyfin/items/batch-ignore" in js
@@ -71,6 +74,11 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert 'id="media-sort-direction"' in html
     assert 'id="server-token"' in html
     assert 'id="server-token-generate"' in html
+    assert 'id="setup-progress"' in html
+    assert 'id="notification-center"' in html
+    assert 'id="setup-dialog"' in html
+    assert 'id="jellyfin-check"' in html
+    assert 'id="diag-health-check"' in html
     assert 'type="text" autocomplete="off" spellcheck="false"' in html
     assert "仅看缺失" in js
     assert "全选缺失" in js

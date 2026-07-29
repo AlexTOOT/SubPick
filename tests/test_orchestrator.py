@@ -321,6 +321,7 @@ def build_settings(
 ) -> AppSettings:
     return AppSettings(
         data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
         sync={"enabled": sync_enabled},
         subtitles={"save_unsynced_on_sync_failure": save_unsynced_on_sync_failure},
     )

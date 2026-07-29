@@ -203,6 +203,7 @@ def create_app(
         token=token,
     )
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

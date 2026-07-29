@@ -27,6 +27,8 @@ const state = {
   logs: [],
   logAfterId: 0,
   logSource: null,
+  overviewSource: null,
+  overviewRefreshTimer: null,
   logsPaused: false,
   jellyfinSettings: null,
   githubSettings: null,
@@ -158,12 +160,94 @@ function renderHeaderStatus() {
   $("#metric-providers").textContent = String(enabled);
   $("#service-status").innerHTML = [
     ["Sidecar", `v${diag.version}`, diag.overall_status === "ok"],
-    ["Jellyfin", diag.jellyfin.configured ? "已配置" : "未配置", diag.jellyfin.configured],
+    ["Jellyfin", diag.jellyfin.connected ? "已连接" : diag.jellyfin.configured ? "等待测试" : "未配置", diag.jellyfin.connected],
+    ["MoviePilot", diag.moviepilot.connected ? "已连接" : diag.moviepilot.token_configured ? "等待验证" : "未配置", diag.moviepilot.connected],
+    ["媒体目录", diag.media_dir.status, diag.media_dir.status === "ok"],
     ["数据目录", diag.data_dir.status, diag.data_dir.status === "ok"],
     ["数据库", diag.database.status, diag.database.status === "ok"],
   ].map(([name, value, ok]) => `
     <div class="status-item"><span>${escapeHtml(name)}</span><strong>${badge(ok ? "completed" : "failed", value)}</strong></div>
   `).join("");
+  renderSetupStatus();
+}
+
+function renderSetupStatus() {
+  const setup = state.diagnostics?.setup;
+  if (!setup) return;
+  const progress = $("#setup-progress");
+  progress.hidden = setup.completed;
+  progress.innerHTML = setup.completed ? "" : (setup.steps || []).map((step) => `
+    <button class="setup-step ${escapeHtml(step.status)}" type="button"
+      data-setup-view="${escapeHtml(step.target_view)}"
+      data-setup-section="${escapeHtml(step.target_section || "")}">
+      <i aria-hidden="true"></i>
+      <span>${escapeHtml(step.label)}</span>
+      ${step.help ? `<span class="help-icon" tabindex="0" aria-label="${escapeHtml(step.help)}" data-tooltip="${escapeHtml(step.help)}">?</span>` : ""}
+    </button>
+  `).join("");
+  $$("[data-setup-view]", progress).forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target.closest(".help-icon")) return;
+    goToSetupTarget(button.dataset.setupView, button.dataset.setupSection);
+  }));
+
+  const center = $("#notification-center");
+  const notifications = setup.notifications || [];
+  center.hidden = notifications.length === 0;
+  center.innerHTML = notifications.map((item) => `
+    <button class="notification ${escapeHtml(item.level)}" type="button"
+      data-notification-view="${escapeHtml(item.target_view)}"
+      data-notification-section="${escapeHtml(item.target_section || "")}">
+      <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small></span>
+      <b aria-hidden="true">→</b>
+    </button>
+  `).join("");
+  $$("[data-notification-view]", center).forEach((button) => button.addEventListener("click", () => {
+    goToSetupTarget(button.dataset.notificationView, button.dataset.notificationSection);
+  }));
+  renderSetupDialog();
+}
+
+function renderSetupDialog() {
+  const setup = state.diagnostics?.setup;
+  if (!setup || setup.completed) {
+    $("#setup-dialog").hidden = true;
+    return;
+  }
+  $("#setup-dialog-steps").innerHTML = (setup.steps || []).map((step) => `
+    <button type="button" class="setup-dialog-step ${escapeHtml(step.status)}"
+      data-setup-view="${escapeHtml(step.target_view)}"
+      data-setup-section="${escapeHtml(step.target_section || "")}">
+      <i aria-hidden="true"></i>
+      <span><strong>${escapeHtml(step.label)}</strong><small>${step.status === "ready" ? "已完成" : step.status === "waiting" ? "等待验证" : "待配置"}</small></span>
+      ${step.help ? `<span class="help-icon" tabindex="0" aria-label="${escapeHtml(step.help)}" data-tooltip="${escapeHtml(step.help)}">?</span>` : "<b>→</b>"}
+    </button>
+  `).join("");
+  $$("[data-setup-view]", $("#setup-dialog-steps")).forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target.closest(".help-icon")) return;
+    closeSetupDialog();
+    goToSetupTarget(button.dataset.setupView, button.dataset.setupSection);
+  }));
+}
+
+function maybeOpenSetupDialog() {
+  const setup = state.diagnostics?.setup;
+  if (!setup || setup.completed || window.localStorage.getItem("subpick-setup-dismissed-v1")) return;
+  $("#setup-dialog").hidden = false;
+}
+
+function closeSetupDialog() {
+  $("#setup-dialog").hidden = true;
+}
+
+function goToSetupTarget(view, section = "") {
+  switchView(view || "settings");
+  if (!section) return;
+  window.setTimeout(() => {
+    const target = $(`[data-settings-section="${CSS.escape(section)}"]`);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    target?.classList.add("attention");
+    window.setTimeout(() => target?.classList.remove("attention"), 1600);
+  }, 160);
 }
 
 async function loadJobs({ overview = false } = {}) {
@@ -858,7 +942,19 @@ function renderDiagnostics() {
       ["下个搜索槽位", `${Math.ceil(diag.queue.next_provider_ready_seconds || 0)} 秒`],
       ...Object.entries(diag.queue.provider_cooldowns || {}).map(([name, seconds]) => [`${name} 冷却`, `${Math.ceil(seconds)} 秒`]),
     ]],
-    ["存储", [["数据目录", diag.data_dir.status], ["数据库", diag.database.status], ["日志保留", `${diag.logging.retention_days} 天`]]],
+    ["连接", [
+      ["MoviePilot", diag.moviepilot.connected ? "已连接" : diag.moviepilot.token_configured ? "等待验证" : "未配置"],
+      ["最后回调", formatTime(diag.moviepilot.last_callback_at)],
+      ["Jellyfin", diag.jellyfin.connected ? "已连接" : diag.jellyfin.configured ? "等待测试" : "未配置"],
+    ]],
+    ["存储", [
+      ["配置文件", diag.config_file.status],
+      ["数据目录", diag.data_dir.status],
+      ["缓存目录", diag.cache_dir.status],
+      ["媒体目录", diag.media_dir.status],
+      ["数据库", diag.database.status],
+      ["日志保留", `${diag.logging.retention_days} 天`],
+    ]],
     ["兼容性", [["配置版本", diag.compatibility.config_version], ["数据库版本", diag.compatibility.database_schema_version], ["状态", diag.compatibility.status]]],
   ];
   $("#diagnostic-grid").innerHTML = cards.map(([title, rows]) => `
@@ -1116,8 +1212,63 @@ async function saveJellyfin(event) {
     state.jellyfinSettings = payload;
     $("#jellyfin-key").value = "";
     $("#jellyfin-key-status").textContent = payload.api_key_configured ? "API Key 已配置" : "尚未配置 API Key";
+    await loadDiagnostics();
     showToast("Jellyfin 配置已保存");
   } catch (error) { showToast(error.message, true); }
+}
+
+function connectOverviewEvents() {
+  if (state.overviewSource || state.view !== "overview") return;
+  const source = new EventSource("/api/v1/events");
+  state.overviewSource = source;
+  source.addEventListener("task_event", () => {
+    window.clearTimeout(state.overviewRefreshTimer);
+    state.overviewRefreshTimer = window.setTimeout(() => {
+      if (state.view !== "overview") return;
+      Promise.all([loadDiagnostics(), loadJobs({ overview: true })]).catch(() => {});
+    }, 350);
+  });
+  source.onerror = () => {
+    source.close();
+    if (state.overviewSource === source) state.overviewSource = null;
+  };
+}
+
+function disconnectOverviewEvents() {
+  window.clearTimeout(state.overviewRefreshTimer);
+  state.overviewSource?.close();
+  state.overviewSource = null;
+}
+
+async function runHealthCheck() {
+  showToast("正在运行系统健康检查");
+  const failures = [];
+  if (state.diagnostics?.jellyfin?.configured) {
+    try {
+      await api("/api/v1/jellyfin/check", { method: "POST" });
+    } catch (error) {
+      failures.push(`Jellyfin：${error.message}`);
+    }
+  }
+  state.providerAutoCheckStarted = false;
+  await autoCheckProviders();
+  await loadDiagnostics();
+  if (failures.length) {
+    showToast(`健康检查完成，${failures.join("；")}`, true);
+  } else {
+    showToast("健康检查完成");
+  }
+}
+
+async function checkJellyfin() {
+  try {
+    const { payload } = await api("/api/v1/jellyfin/check", { method: "POST" });
+    await loadDiagnostics();
+    showToast(`Jellyfin 连接成功，发现 ${payload.library_count} 个媒体库`);
+  } catch (error) {
+    await loadDiagnostics().catch(() => {});
+    showToast(error.message, true);
+  }
 }
 
 async function saveGitHub(event) {
@@ -1143,6 +1294,7 @@ async function saveGitHub(event) {
     $("#github-key-status").textContent = github.api_key_configured
       ? "GitHub Token 已配置，仅用于查询组件更新。"
       : "未配置时使用 GitHub 匿名 API 配额。";
+    await loadDiagnostics();
     showToast("系统配置已保存");
   } catch (error) { showToast(error.message, true); }
 }
@@ -1152,6 +1304,30 @@ function generateServerToken() {
   window.crypto.getRandomValues(bytes);
   $("#server-token").value = [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
   $("#server-token").focus();
+}
+
+function exportSettings() {
+  window.location.href = "/api/v1/settings/export";
+}
+
+async function importSettingsFile(event) {
+  const [file] = event.target.files || [];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    const { payload: result } = await api("/api/v1/settings/import", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await Promise.all([loadSettings(), loadDiagnostics()]);
+    showToast(result.restart_required
+      ? "配置已导入；config.yaml 已更新，请重启容器后生效"
+      : "配置已导入");
+  } catch (error) {
+    showToast(`导入失败：${error.message}`, true);
+  }
 }
 
 function providerCard(name) {
@@ -1312,6 +1488,7 @@ async function refreshCurrent() {
       } else {
         $("#overview-media").innerHTML = '<p class="empty">Jellyfin 尚未配置，请先在设置中完成连接</p>';
       }
+      connectOverviewEvents();
     } else if (state.view === "tasks") {
       await Promise.all([loadDiagnostics(), loadJobs()]);
     } else if (state.view === "library") {
@@ -1342,13 +1519,14 @@ const viewCopy = {
   tasks: ["任务工作台", "搜索、重试并排查每一个字幕任务"],
   library: ["媒体库", "从 Jellyfin 浏览字幕覆盖状态"],
   logs: ["实时日志", "只在需要时保持实时连接"],
-  diagnostics: ["诊断信息", "版本、依赖、工具与服务状态"],
+  diagnostics: ["系统健康", "目录、连接、组件、工具与服务状态"],
   settings: ["设置", "连接媒体库并管理服务配置"],
 };
 
 function switchView(view, { refresh = true } = {}) {
   if (!viewCopy[view]) return;
   if (state.view === "logs" && view !== "logs") disconnectLogs();
+  if (state.view === "overview" && view !== "overview") disconnectOverviewEvents();
   state.view = view;
   $$(".view").forEach((node) => node.classList.toggle("active", node.id === `view-${view}`));
   $$(".nav-item").forEach((node) => node.classList.toggle("active", node.dataset.view === view));
@@ -1502,10 +1680,24 @@ function bindEvents() {
   });
   $("#logs-clear").addEventListener("click", () => { state.logs = []; renderLogs(); });
   $("#diag-updates").addEventListener("click", checkUpdates);
+  $("#diag-health-check").addEventListener("click", runHealthCheck);
   $("#diag-export").addEventListener("click", () => { window.location.href = "/api/v1/diagnostics/export"; });
   $("#jellyfin-form").addEventListener("submit", saveJellyfin);
+  $("#jellyfin-check").addEventListener("click", checkJellyfin);
   $("#github-form").addEventListener("submit", saveGitHub);
   $("#server-token-generate").addEventListener("click", generateServerToken);
+  $("#settings-export").addEventListener("click", exportSettings);
+  $("#settings-import").addEventListener("click", () => $("#settings-import-file").click());
+  $("#settings-import-file").addEventListener("change", importSettingsFile);
+  $("#setup-skip").addEventListener("click", () => {
+    window.localStorage.setItem("subpick-setup-dismissed-v1", "1");
+    closeSetupDialog();
+  });
+  $("#setup-continue").addEventListener("click", () => {
+    const step = (state.diagnostics?.setup?.steps || []).find((item) => item.status !== "ready");
+    closeSetupDialog();
+    if (step) goToSetupTarget(step.target_view, step.target_section);
+  });
   bindProviderOrderEvents();
   $("#provider-order-save").addEventListener("click", saveProviderOrder);
 }
@@ -1516,6 +1708,7 @@ async function init() {
   const settingsReady = loadSettings().then(() => { void autoCheckProviders(); });
   await Promise.allSettled([refreshCurrent(), settingsReady, minSplash]);
   $("#splash").classList.add("done");
+  maybeOpenSetupDialog();
 }
 
 init();

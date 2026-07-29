@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">拾幕 SubPick</title>
+  <rect width="256" height="256" rx="52" fill="#101416"/>
+  <rect x="45" y="38" width="166" height="112" rx="26" fill="#171c1e" stroke="#303638" stroke-width="8"/>
+  <path d="M113 76 158 102 113 128Z" fill="#9a9da0"/>
+  <rect x="58" y="131" width="143" height="76" rx="20" fill="#111517" stroke="#d9e9b8" stroke-width="8"/>
+  <path d="M83 157h83M83 174h62M83 191h74" stroke="#d9e9b8" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="196" cy="196" r="32" fill="#d9e9b8"/>
+  <path d="m181 196 10 10 20-24" fill="none" stroke="#13211c" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

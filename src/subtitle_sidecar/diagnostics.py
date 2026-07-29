@@ -32,7 +32,14 @@ def build_diagnostics(
     provider_scheduler: Any | None = None,
 ) -> dict[str, Any]:
     """Build a local-only health snapshot without invoking external services."""
+    config_file = _path_check(
+        Path(settings.runtime_config_path)
+        if settings.runtime_config_path is not None
+        else Path(settings.data_dir) / "config.yaml"
+    )
     data_dir = _path_check(Path(settings.data_dir))
+    cache_dir = _path_check(Path(settings.cache_dir))
+    media_dir = _path_check(Path("/media"))
     database = _path_check(Path(settings.data_dir) / "subtitle-sidecar.sqlite3")
     tools = [
         _tool_check("ffprobe", settings.probe.ffprobe_path),
@@ -41,6 +48,12 @@ def build_diagnostics(
     ]
     jellyfin_configured = _jellyfin_configured(settings, engine)
     runtime_metadata = _runtime_metadata(engine)
+    jellyfin = {
+        "configured": jellyfin_configured,
+        "connected": runtime_metadata.get("jellyfin_last_check_status") == "ok",
+        "last_checked_at": runtime_metadata.get("jellyfin_last_checked_at"),
+    }
+    moviepilot = _moviepilot_diagnostic(settings, runtime_metadata)
     database_schema_version = int(runtime_metadata.get("database_schema_version", 0) or 0)
     compatibility_status = (
         "upgrade_required"
@@ -48,13 +61,33 @@ def build_diagnostics(
         else "ok"
     )
     checks = [
+        _check("config_file", config_file["status"]),
         _check("data_dir", data_dir["status"]),
+        _check("cache_dir", cache_dir["status"]),
+        _check("media_dir", media_dir["status"]),
         _check("database", database["status"]),
         *[_check(f"tool:{item['name']}", item["status"]) for item in tools],
     ]
     overall_status = "degraded" if any(item["status"] == "degraded" for item in checks) else "ok"
 
     cooldowns = _provider_cooldowns(provider_scheduler)
+    providers = {
+        "subliminal": _subliminal_diagnostic(settings, engine),
+        "assrt": _assrt_diagnostic(settings, engine),
+        "subdl": _subdl_diagnostic(settings, engine),
+        "zimuku": _zimuku_diagnostic(settings, engine),
+    }
+    setup = _setup_status(
+        config_file=config_file,
+        data_dir=data_dir,
+        cache_dir=cache_dir,
+        media_dir=media_dir,
+        database=database,
+        moviepilot=moviepilot,
+        jellyfin=jellyfin,
+        providers=providers,
+        runtime_metadata=runtime_metadata,
+    )
     return {
         "version": __version__,
         "components": {
@@ -78,21 +111,226 @@ def build_diagnostics(
             "provider_cooldowns": cooldowns,
             "next_provider_ready_seconds": min(cooldowns.values(), default=0.0),
         },
-        "providers": {
-            "subliminal": _subliminal_diagnostic(settings, engine),
-            "assrt": _assrt_diagnostic(settings, engine),
-            "subdl": _subdl_diagnostic(settings, engine),
-            "zimuku": _zimuku_diagnostic(settings, engine),
-        },
-        "jellyfin": {"configured": jellyfin_configured},
+        "providers": providers,
+        "jellyfin": jellyfin,
+        "moviepilot": moviepilot,
+        "setup": setup,
         "tools": tools,
+        "config_file": config_file,
         "data_dir": data_dir,
+        "cache_dir": cache_dir,
+        "media_dir": media_dir,
         "database": database,
         "logging": {
             "retention_days": settings.logging.retention_days,
             "max_task_events": settings.logging.max_task_events,
         },
         "checks": checks,
+    }
+
+
+def _moviepilot_diagnostic(
+    settings: AppSettings,
+    runtime_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    last_callback_at = runtime_metadata.get("moviepilot_last_callback_at")
+    return {
+        "token_configured": bool(settings.server.token),
+        "connected": bool(last_callback_at),
+        "last_callback_at": str(last_callback_at) if last_callback_at else None,
+        "last_received_path": runtime_metadata.get("moviepilot_last_received_path"),
+    }
+
+
+def _setup_status(
+    *,
+    config_file: dict[str, Any],
+    data_dir: dict[str, Any],
+    cache_dir: dict[str, Any],
+    media_dir: dict[str, Any],
+    database: dict[str, Any],
+    moviepilot: dict[str, Any],
+    jellyfin: dict[str, Any],
+    providers: dict[str, dict[str, Any]],
+    runtime_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    storage_ready = all(
+        item["status"] == "ok"
+        for item in (config_file, data_dir, cache_dir, database)
+    )
+    provider_ready = any(
+        item.get("enabled") and item.get("status") not in {"disabled", "unconfigured"}
+        for item in providers.values()
+    )
+    steps = [
+        _setup_step("storage", "运行目录", storage_ready, "diagnostics"),
+        _setup_step("media", "媒体目录", media_dir["status"] == "ok", "diagnostics"),
+        {
+            "id": "moviepilot",
+            "label": "MoviePilot",
+            "status": (
+                "ready"
+                if moviepilot["connected"]
+                else "waiting"
+                if moviepilot["token_configured"]
+                else "missing"
+            ),
+            "target_view": "settings",
+            "target_section": "system",
+            "help": (
+                "需要成功接收到一次 MoviePilot 的鉴权调用后才会显示已连接。"
+                if moviepilot["token_configured"] and not moviepilot["connected"]
+                else None
+            ),
+        },
+        _setup_step(
+            "jellyfin",
+            "Jellyfin",
+            bool(jellyfin.get("connected")),
+            "settings",
+            "jellyfin",
+        ),
+        _setup_step("provider", "字幕来源", provider_ready, "settings", "providers"),
+    ]
+    if providers.get("zimuku", {}).get("enabled"):
+        steps.append(
+            _setup_step(
+                "ocr",
+                "验证码识别",
+                runtime_metadata.get("zimuku_ocr_last_check_status") == "ok",
+                "settings",
+                "providers",
+            )
+        )
+    notifications: list[dict[str, Any]] = []
+    if not storage_ready:
+        notifications.append(
+            _notification(
+                "storage-unavailable",
+                "error",
+                "运行目录不可用",
+                "请检查拾幕主目录是否可写。",
+                "diagnostics",
+            )
+        )
+    if media_dir["status"] != "ok":
+        notifications.append(
+            _notification(
+                "media-unavailable",
+                "error",
+                "媒体目录不可用",
+                "请确认 Compose 中已把 MoviePilot 的完整媒体目录挂载到 /media，并允许写入字幕。",
+                "diagnostics",
+            )
+        )
+    path_issue = runtime_metadata.get("moviepilot_path_issue")
+    if isinstance(path_issue, dict) and path_issue.get("received_path"):
+        notifications.append(
+            _notification(
+                "moviepilot-path",
+                "error",
+                "MoviePilot 路径无法访问",
+                f"最近收到的路径无法在容器中找到：{path_issue['received_path']}",
+                "diagnostics",
+            )
+        )
+    if moviepilot["token_configured"] and not moviepilot["connected"]:
+        notifications.append(
+            _notification(
+                "moviepilot-waiting",
+                "info",
+                "MoviePilot 等待验证",
+                "保存 Token 后，需要成功接收到一次 MoviePilot 调用才能确认连接。",
+                "settings",
+                "system",
+            )
+        )
+    if not jellyfin.get("configured"):
+        notifications.append(
+            _notification(
+                "jellyfin-missing",
+                "warning",
+                "尚未连接 Jellyfin",
+                "连接后才能浏览媒体库、海报和字幕状态。",
+                "settings",
+                "jellyfin",
+            )
+        )
+    elif not jellyfin.get("connected"):
+        notifications.append(
+            _notification(
+                "jellyfin-unverified",
+                "info",
+                "Jellyfin 等待连接测试",
+                "配置已保存，请执行一次连接测试确认地址、API Key 与用户可用。",
+                "settings",
+                "jellyfin",
+            )
+        )
+    if not provider_ready:
+        notifications.append(
+            _notification(
+                "provider-missing",
+                "warning",
+                "尚无可用字幕来源",
+                "请至少启用并配置一个 Provider。",
+                "settings",
+                "providers",
+            )
+        )
+    if (
+        providers.get("zimuku", {}).get("enabled")
+        and runtime_metadata.get("zimuku_ocr_last_check_status") != "ok"
+    ):
+        notifications.append(
+            _notification(
+                "ocr-unverified",
+                "warning",
+                "Zimuku OCR 尚未通过实图测试",
+                "请在 Zimuku 设置中执行 OCR 实图检查。",
+                "settings",
+                "providers",
+            )
+        )
+    return {
+        "completed": all(step["status"] == "ready" for step in steps),
+        "steps": steps,
+        "notifications": notifications,
+    }
+
+
+def _setup_step(
+    step_id: str,
+    label: str,
+    ready: bool,
+    target_view: str,
+    target_section: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": step_id,
+        "label": label,
+        "status": "ready" if ready else "missing",
+        "target_view": target_view,
+        "target_section": target_section,
+        "help": None,
+    }
+
+
+def _notification(
+    notification_id: str,
+    level: str,
+    title: str,
+    message: str,
+    target_view: str,
+    target_section: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": notification_id,
+        "level": level,
+        "title": title,
+        "message": message,
+        "target_view": target_view,
+        "target_section": target_section,
     }
 
 

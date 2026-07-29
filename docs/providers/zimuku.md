@@ -40,7 +40,7 @@ providers:
 拒绝时，拾幕会把图片与脱敏结果保存到：
 
 ```text
-/data/diagnostics/captcha/zimuku
+/appdata/data/diagnostics/captcha/zimuku
 ```
 
 最多保留 100 组，仅建议排障时开启。

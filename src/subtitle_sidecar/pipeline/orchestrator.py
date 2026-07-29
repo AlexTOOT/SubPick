@@ -95,7 +95,7 @@ class SubtitleOrchestrator:
         self.provider_registry = provider_registry
         self.embedded_subtitle_detector = embedded_subtitle_detector or probe_video_streams
         self.subtitle_syncer = subtitle_syncer or sync_subtitle
-        self.bundle_cache = bundle_cache or EpisodeBundleCache(Path(settings.data_dir))
+        self.bundle_cache = bundle_cache or EpisodeBundleCache(Path(settings.cache_dir))
         self.jellyfin_client_factory = jellyfin_client_factory
         self._retry_content_identities: dict[int, dict[str, int]] = {}
 

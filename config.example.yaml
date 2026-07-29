@@ -1,4 +1,5 @@
-data_dir: /data
+data_dir: /appdata/data
+cache_dir: /appdata/cache
 
 server:
   host: 0.0.0.0
@@ -7,9 +8,8 @@ server:
   token: ""
 
 paths:
-  mappings:
-    - from: /moviepilot/media
-      to: /media
+  # 通常无需填写。只有 MoviePilot 下发路径与 /media 不一致时才配置。
+  mappings: []
 
 subtitles:
   preferred: bilingual
@@ -56,7 +56,7 @@ providers:
     moviepilot_ocr_url: "http://moviepilot-ocr:9899"
     # Optional paid fallback when local OCR cannot recognize a challenge.
     anti_captcha_api_key: ""
-    # Development diagnostics are stored under /data/diagnostics/captcha/zimuku.
+    # Development diagnostics are stored under /appdata/data/diagnostics/captcha/zimuku.
     captcha_debug_capture: false
     timeout_seconds: 30
     request_delay_seconds: 1

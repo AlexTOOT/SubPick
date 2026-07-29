@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RemotePath,
     [string]$IdentityFile = "",
     [int]$Port = 22,
-    [string]$ComposeService = "subtitle-sidecar",
+    [string]$ComposeService = "subpick",
     [string]$HealthUrl = "http://127.0.0.1:19035/api/v1/health"
 )
 
@@ -68,13 +68,13 @@ mkdir -p "$STAGE"
 tar -xf "$ARCHIVE" -C "$STAGE"
 test -f "$STAGE/uv.lock"
 test -f "$STAGE/Dockerfile"
-docker build -t "subtitle-sidecar:__COMMIT__" "$STAGE"
-tar -xf "$ARCHIVE" -C "$ROOT"
+docker build -t "ghcr.io/alextoot/subpick:__COMMIT__" "$STAGE"
+cp "$STAGE/compose.yaml" "$ROOT/compose.yaml"
 
-ROLLBACK_IMAGE="subtitle-sidecar:rollback-__COMMIT__"
+ROLLBACK_IMAGE="ghcr.io/alextoot/subpick:rollback-__COMMIT__"
 HAS_ROLLBACK=0
-if docker image inspect subtitle-sidecar:latest >/dev/null 2>&1; then
-    docker tag subtitle-sidecar:latest "$ROLLBACK_IMAGE"
+if docker image inspect ghcr.io/alextoot/subpick:latest >/dev/null 2>&1; then
+    docker tag ghcr.io/alextoot/subpick:latest "$ROLLBACK_IMAGE"
     HAS_ROLLBACK=1
 fi
 
@@ -83,7 +83,7 @@ rollback_deployment() {
         return
     fi
     echo "Deployment health check failed; restoring the previous image." >&2
-    docker tag "$ROLLBACK_IMAGE" subtitle-sidecar:latest
+    docker tag "$ROLLBACK_IMAGE" ghcr.io/alextoot/subpick:latest
     cd "$ROOT"
     docker compose up -d --no-build --force-recreate __SERVICE__
     for rollback_attempt in $(seq 1 15); do
@@ -96,7 +96,7 @@ rollback_deployment() {
     echo "Previous image was restored but did not become healthy." >&2
 }
 
-docker tag "subtitle-sidecar:__COMMIT__" subtitle-sidecar:latest
+docker tag "ghcr.io/alextoot/subpick:__COMMIT__" ghcr.io/alextoot/subpick:latest
 cd "$ROOT"
 if ! docker compose up -d --no-build --force-recreate __SERVICE__; then
     rollback_deployment

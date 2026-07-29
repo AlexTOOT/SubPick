@@ -9,9 +9,11 @@ from typing import Annotated
 from urllib.parse import quote
 
 import httpx
+import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from starlette.responses import StreamingResponse
 
+from subtitle_sidecar import RUNTIME_METADATA_SETTING_KEY
 from subtitle_sidecar.api.schemas import (
     AddJobRequest,
     AddJobResponse,
@@ -39,6 +41,7 @@ from subtitle_sidecar.api.schemas import (
     JellyfinScanResponse,
     JellyfinSettingsRequest,
     JellyfinSettingsResponse,
+    JellyfinConnectionCheckResponse,
     GitHubSettingsRequest,
     GitHubSettingsResponse,
     ServerSettingsRequest,
@@ -73,6 +76,7 @@ from subtitle_sidecar.api.schemas import (
     DependencyUpdateChecksResponse,
 )
 from subtitle_sidecar.config import (
+    AppSettings,
     merge_assrt_provider_settings,
     merge_subdl_provider_settings,
     merge_subliminal_provider_settings,
@@ -103,6 +107,16 @@ ZIMUKU_SETTING_KEY = "zimuku"
 GITHUB_SETTING_KEY = "github"
 SERVER_SETTING_KEY = "server"
 PROVIDER_ORDER_SETTING_KEY = "provider_order"
+BACKUP_SETTING_KEYS = (
+    JELLYFIN_SETTING_KEY,
+    SUBLIMINAL_SETTING_KEY,
+    ASSRT_SETTING_KEY,
+    SUBDL_SETTING_KEY,
+    ZIMUKU_SETTING_KEY,
+    GITHUB_SETTING_KEY,
+    SERVER_SETTING_KEY,
+    PROVIDER_ORDER_SETTING_KEY,
+)
 
 
 def _require_bearer_token(
@@ -238,6 +252,69 @@ def create_api_router() -> APIRouter:
             headers={"Content-Disposition": "attachment; filename=subtitle-sidecar-diagnostics.json"},
         )
 
+    @router.get("/settings/export")
+    def export_settings(request: Request) -> Response:
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            stored = {
+                key: value
+                for key in BACKUP_SETTING_KEYS
+                if (value := repo.get_setting(key)) is not None
+            }
+        config_yaml = ""
+        config_path = request.app.state.settings.runtime_config_path
+        if config_path is not None and config_path.is_file():
+            config_yaml = config_path.read_text(encoding="utf-8")
+        payload = {
+            "format": "subpick-settings-v1",
+            "exported_at": datetime.now(UTC).isoformat(),
+            "config_yaml": config_yaml,
+            "settings": stored,
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=subpick-settings.json"},
+        )
+
+    @router.put("/settings/import")
+    def import_settings(request: Request, payload: dict) -> dict[str, bool]:
+        if payload.get("format") != "subpick-settings-v1":
+            raise HTTPException(status_code=422, detail="不支持的配置备份格式")
+        stored = payload.get("settings")
+        if not isinstance(stored, dict):
+            raise HTTPException(status_code=422, detail="配置备份缺少 settings")
+        config_yaml = payload.get("config_yaml")
+        restart_required = False
+        if isinstance(config_yaml, str) and config_yaml.strip():
+            try:
+                parsed = yaml.safe_load(config_yaml) or {}
+                if not isinstance(parsed, dict):
+                    raise ValueError("top-level value must be an object")
+                AppSettings(**parsed)
+            except Exception as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"config.yaml 无效：{error}",
+                ) from error
+            config_path = request.app.state.settings.runtime_config_path
+            if config_path is not None:
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary_path = config_path.with_suffix(".yaml.tmp")
+                temporary_path.write_text(config_yaml, encoding="utf-8")
+                temporary_path.replace(config_path)
+                restart_required = True
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            for key in BACKUP_SETTING_KEYS:
+                value = stored.get(key)
+                if isinstance(value, dict):
+                    repo.set_setting(key, value)
+        server = stored.get(SERVER_SETTING_KEY)
+        if isinstance(server, dict) and "token" in server:
+            request.app.state.settings.server.token = str(server.get("token") or "")
+        return {"imported": True, "restart_required": restart_required}
+
     @router.post(
         "/diagnostics/dependency-updates",
         response_model=DependencyUpdateChecksResponse,
@@ -265,6 +342,23 @@ def create_api_router() -> APIRouter:
     ) -> AddJobResponse:
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            received_path = payload.physical_video_file_full_path
+            resolved = MediaResolver(request.app.state.settings.paths).resolve(received_path)
+            runtime_metadata.update(
+                {
+                    "moviepilot_last_callback_at": datetime.now(UTC).isoformat(),
+                    "moviepilot_last_received_path": received_path,
+                }
+            )
+            if resolved.resolved_path is None:
+                runtime_metadata["moviepilot_path_issue"] = {
+                    "received_path": received_path,
+                    "detected_at": datetime.now(UTC).isoformat(),
+                }
+            else:
+                runtime_metadata.pop("moviepilot_path_issue", None)
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
             job = repo.create_job(
                 JobCreate(
                     source="moviepilot-csf",
@@ -340,7 +434,48 @@ def create_api_router() -> APIRouter:
                 "user_id": payload.user_id.strip(),
             }
             repo.set_setting(JELLYFIN_SETTING_KEY, config)
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            runtime_metadata.pop("jellyfin_last_check_status", None)
+            runtime_metadata.pop("jellyfin_last_checked_at", None)
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
         return _to_jellyfin_settings_response(config)
+
+    @router.post(
+        "/jellyfin/check",
+        response_model=JellyfinConnectionCheckResponse,
+    )
+    def check_jellyfin_connection(request: Request) -> JellyfinConnectionCheckResponse:
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            config = _require_jellyfin_config(request, repo)
+        try:
+            libraries = _jellyfin_client(request, config).list_libraries()
+        except Exception as error:
+            with session_scope(request.app.state.engine) as session:
+                repo = Repository(session)
+                metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+                metadata.update(
+                    {
+                        "jellyfin_last_check_status": "failed",
+                        "jellyfin_last_checked_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+                repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+            raise HTTPException(status_code=502, detail="Jellyfin 连接测试失败") from error
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            metadata.update(
+                {
+                    "jellyfin_last_check_status": "ok",
+                    "jellyfin_last_checked_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+        return JellyfinConnectionCheckResponse(
+            connected=True,
+            library_count=len(libraries),
+        )
 
     @router.get(
         "/github/settings",
@@ -383,8 +518,15 @@ def create_api_router() -> APIRouter:
         payload: ServerSettingsRequest,
     ) -> ServerSettingsResponse:
         token = payload.token.strip()
+        previous_token = request.app.state.settings.server.token
         with session_scope(request.app.state.engine) as session:
-            Repository(session).set_setting(SERVER_SETTING_KEY, {"token": token})
+            repo = Repository(session)
+            repo.set_setting(SERVER_SETTING_KEY, {"token": token})
+            if token != previous_token:
+                runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+                runtime_metadata.pop("moviepilot_last_callback_at", None)
+                runtime_metadata.pop("moviepilot_last_received_path", None)
+                repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
         request.app.state.settings.server.token = token
         return ServerSettingsResponse(token=token)
 
@@ -604,6 +746,10 @@ def create_api_router() -> APIRouter:
                 "request_delay_seconds": payload.request_delay_seconds,
             }
             repo.set_setting(ZIMUKU_SETTING_KEY, saved)
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            runtime_metadata.pop("zimuku_ocr_last_check_status", None)
+            runtime_metadata.pop("zimuku_ocr_last_checked_at", None)
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
             config = _load_zimuku_config(request, repo)
         return _to_zimuku_settings_response(config, request.app.state.settings.data_dir)
 
@@ -615,6 +761,7 @@ def create_api_router() -> APIRouter:
         with session_scope(request.app.state.engine) as session:
             config = _load_zimuku_config(request, Repository(session))
         if not config.moviepilot_ocr_url:
+            _record_runtime_health(request, "zimuku_ocr", "failed")
             emit_structured_log(
                 event="provider_diagnostic",
                 provider="zimuku",
@@ -643,6 +790,7 @@ def create_api_router() -> APIRouter:
         try:
             duration_ms = solver.check_available()
         except Exception as error:
+            _record_runtime_health(request, "zimuku_ocr", "failed")
             emit_structured_log(
                 event="provider_diagnostic",
                 provider="zimuku",
@@ -659,6 +807,7 @@ def create_api_router() -> APIRouter:
             ) from error
         answer = str(getattr(solver, "last_check_answer", "")).strip()
         if answer != expected:
+            _record_runtime_health(request, "zimuku_ocr", "failed")
             emit_structured_log(
                 event="provider_diagnostic",
                 provider="zimuku",
@@ -689,6 +838,7 @@ def create_api_router() -> APIRouter:
             recognized_answer=answer,
             expected_answer=expected,
         )
+        _record_runtime_health(request, "zimuku_ocr", "ok")
         return ZimukuOcrCheckResponse(
             status="available",
             duration_ms=duration_ms,
@@ -838,7 +988,7 @@ def create_api_router() -> APIRouter:
                 scanned_item_ids,
             )
 
-        _purge_jellyfin_image_cache(request.app.state.settings.data_dir, removed_ids)
+        _purge_jellyfin_image_cache(request.app.state.settings.cache_dir, removed_ids)
 
         return JellyfinScanResponse(
             library_id=library_id,
@@ -958,7 +1108,7 @@ def create_api_router() -> APIRouter:
             return Response(status_code=304, headers=headers)
 
         cached = _read_jellyfin_image_cache(
-            request.app.state.settings.data_dir,
+            request.app.state.settings.cache_dir,
             item_id,
             item.primary_image_tag,
         )
@@ -973,7 +1123,7 @@ def create_api_router() -> APIRouter:
                 raise HTTPException(status_code=404, detail="Jellyfin image not found") from exc
             raise HTTPException(status_code=502, detail="Jellyfin image request failed") from exc
         _write_jellyfin_image_cache(
-            request.app.state.settings.data_dir,
+            request.app.state.settings.cache_dir,
             item_id,
             item.primary_image_tag,
             content,
@@ -1569,6 +1719,19 @@ def _jellyfin_client(request: Request, config: dict[str, str]):
     )
 
 
+def _record_runtime_health(request: Request, name: str, status: str) -> None:
+    with session_scope(request.app.state.engine) as session:
+        repo = Repository(session)
+        metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+        metadata.update(
+            {
+                f"{name}_last_check_status": status,
+                f"{name}_last_checked_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+
+
 def _find_jellyfin_library(client, library_id: str) -> dict[str, str]:
     for library in client.list_libraries():
         if library["id"] == library_id:
@@ -1763,18 +1926,18 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return etag in {value.strip() for value in if_none_match.split(",")}
 
 
-def _jellyfin_image_cache_paths(data_dir: Path, item_id: str, image_tag: str) -> tuple[Path, Path]:
-    cache_dir = data_dir / "cache" / "jellyfin-images"
+def _jellyfin_image_cache_paths(cache_root: Path, item_id: str, image_tag: str) -> tuple[Path, Path]:
+    cache_dir = cache_root / "jellyfin-images"
     key = f"{quote(item_id, safe='')}+{quote(image_tag, safe='')}"
     return cache_dir / f"{key}.image", cache_dir / f"{key}.json"
 
 
 def _read_jellyfin_image_cache(
-    data_dir: Path,
+    cache_dir: Path,
     item_id: str,
     image_tag: str,
 ) -> tuple[bytes, str] | None:
-    image_path, metadata_path = _jellyfin_image_cache_paths(data_dir, item_id, image_tag)
+    image_path, metadata_path = _jellyfin_image_cache_paths(cache_dir, item_id, image_tag)
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         content_type = str(metadata.get("content_type") or "application/octet-stream")
@@ -1784,13 +1947,13 @@ def _read_jellyfin_image_cache(
 
 
 def _write_jellyfin_image_cache(
-    data_dir: Path,
+    cache_dir: Path,
     item_id: str,
     image_tag: str,
     content: bytes,
     content_type: str,
 ) -> None:
-    image_path, metadata_path = _jellyfin_image_cache_paths(data_dir, item_id, image_tag)
+    image_path, metadata_path = _jellyfin_image_cache_paths(cache_dir, item_id, image_tag)
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(content)
     metadata_path.write_text(
@@ -1799,8 +1962,8 @@ def _write_jellyfin_image_cache(
     )
 
 
-def _purge_jellyfin_image_cache(data_dir: Path, item_ids: list[str]) -> None:
-    cache_dir = data_dir / "cache" / "jellyfin-images"
+def _purge_jellyfin_image_cache(cache_root: Path, item_ids: list[str]) -> None:
+    cache_dir = cache_root / "jellyfin-images"
     for item_id in item_ids:
         for path in cache_dir.glob(f"{quote(item_id, safe='')}+*"):
             try:

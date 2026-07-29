@@ -35,13 +35,13 @@
         </div>
         <nav aria-label="主导航">
           <span class="nav-caption">工作区</span>
-          <button class="nav-item active" data-view="overview" type="button"><b>总</b>运行概览</button>
-          <button class="nav-item" data-view="tasks" type="button"><b>任</b>任务工作台</button>
-          <button class="nav-item" data-view="library" type="button"><b>库</b>媒体库</button>
+          <button class="nav-item active" data-view="overview" type="button"><b><svg viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></b>运行概览</button>
+          <button class="nav-item" data-view="tasks" type="button"><b><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></b>任务工作台</button>
+          <button class="nav-item" data-view="library" type="button"><b><svg viewBox="0 0 24 24"><path d="m16 6 4 14M12 6v14M8 8v12M4 4v16"/></svg></b>媒体库</button>
           <span class="nav-caption">状态</span>
-          <button class="nav-item" data-view="logs" type="button"><b>志</b>实时日志</button>
-          <button class="nav-item" data-view="diagnostics" type="button"><b>诊</b>诊断信息</button>
-          <button class="nav-item" data-view="settings" type="button"><b>设</b>设置</button>
+          <button class="nav-item" data-view="logs" type="button"><b><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg></b>实时日志</button>
+          <button class="nav-item" data-view="diagnostics" type="button"><b><svg viewBox="0 0 24 24"><path d="M19 14v1a7 7 0 0 1-14 0v-1M12 19v3M8 22h8"/><circle cx="12" cy="8" r="5"/><path d="M12 6v2l1.5 1.5"/></svg></b>系统健康</button>
+          <button class="nav-item" data-view="settings" type="button"><b><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></b>设置</button>
         </nav>
         <div class="sidebar-foot">
           <span id="sidebar-health-dot" class="dot unknown"></span>
@@ -55,6 +55,7 @@
             <h1 id="page-title">运行概览</h1>
             <p id="page-subtitle">让每一部影片，都有合适的字幕</p>
           </div>
+          <div id="setup-progress" class="setup-progress" aria-label="首次配置进度" hidden></div>
           <div class="top-actions">
             <span id="queue-chip" class="chip">队列 --</span>
             <span id="provider-chip" class="chip">Provider --</span>
@@ -66,6 +67,7 @@
           <p id="toast" class="toast" role="status" aria-live="polite"></p>
 
           <section id="view-overview" class="view active" aria-labelledby="overview-title">
+            <section id="notification-center" class="notification-center" aria-label="需要处理的通知" hidden></section>
             <div class="overview-strip">
               <div><span>当前任务</span><strong id="metric-active">--</strong><small>正在处理</small></div>
               <div><span>等待队列</span><strong id="metric-queued">--</strong><small>个任务</small></div>
@@ -194,8 +196,8 @@
 
           <section id="view-diagnostics" class="view" aria-labelledby="diag-title">
             <div class="view-heading">
-              <div><h2 id="diag-title">诊断信息</h2><p>版本、依赖、工具与运行状态</p></div>
-              <div class="actions"><button id="diag-updates" type="button">检查组件更新</button><button id="diag-export" type="button">导出诊断</button></div>
+              <div><h2 id="diag-title">系统健康检查</h2><p>目录、连接、组件、工具与运行状态</p></div>
+              <div class="actions"><button id="diag-health-check" class="primary" type="button">运行健康检查</button><button id="diag-updates" type="button">检查组件更新</button><button id="diag-export" type="button">导出诊断</button></div>
             </div>
             <div id="diagnostic-grid" class="diagnostic-grid"><p class="empty">正在读取诊断信息</p></div>
           </section>
@@ -203,16 +205,19 @@
           <section id="view-settings" class="view" aria-labelledby="settings-title">
             <div class="view-heading"><div><h2 id="settings-title">设置</h2><p>连接 Jellyfin，管理字幕来源的顺序与配置</p></div></div>
             <div class="settings-grid">
-              <form id="jellyfin-form" class="panel settings-card">
+              <form id="jellyfin-form" class="panel settings-card" data-settings-section="jellyfin">
                 <div class="panel-heading"><div><h2>Jellyfin 配置</h2><p>用于媒体库、海报和入库信息</p></div></div>
                 <label>Jellyfin 地址<input id="jellyfin-url" type="url" placeholder="http://jellyfin:8096"></label>
                 <label>API Key<input id="jellyfin-key" type="password" autocomplete="off" placeholder="留空表示保留现有值"></label>
                 <p id="jellyfin-key-status" class="settings-note"></p>
                 <label>User ID<input id="jellyfin-user" type="text"></label>
-                <div class="form-actions"><button class="primary" type="submit">保存 Jellyfin 配置</button></div>
+                <div class="form-actions split-actions">
+                  <button id="jellyfin-check" type="button">测试连接</button>
+                  <button class="primary" type="submit">保存 Jellyfin 配置</button>
+                </div>
               </form>
 
-              <form id="github-form" class="panel settings-card">
+              <form id="github-form" class="panel settings-card" data-settings-section="system">
                 <div class="panel-heading"><div><h2>系统与更新</h2><p>管理 MoviePilot 通信鉴权与组件更新凭据</p></div></div>
                 <label>MoviePilot API Token
                   <span class="field-with-action">
@@ -223,10 +228,17 @@
                 <p class="settings-note">填写后 MoviePilot 插件请求必须携带相同 Token；留空则不鉴权。</p>
                 <label>GitHub API Token<input id="github-key" type="password" autocomplete="off" placeholder="可选，留空表示保留现有值"></label>
                 <p id="github-key-status" class="settings-note">仅用于查询 GitHub Release，不会上传媒体信息。</p>
-                <div class="form-actions"><button class="primary" type="submit">保存系统配置</button></div>
+                <div class="form-actions split-actions">
+                  <span>
+                    <button id="settings-export" type="button">导出配置</button>
+                    <button id="settings-import" type="button">导入配置</button>
+                    <input id="settings-import-file" type="file" accept="application/json,.json" hidden>
+                  </span>
+                  <button class="primary" type="submit">保存系统配置</button>
+                </div>
               </form>
 
-              <section class="panel settings-card settings-span-all">
+              <section class="panel settings-card settings-span-all" data-settings-section="providers">
                 <div class="panel-heading">
                   <div><h2>Provider</h2><p>拖拽调整搜索顺序，点击卡片展开认证与高级设置</p></div>
                   <button id="provider-order-save" class="primary" type="button">保存顺序</button>
@@ -254,6 +266,18 @@
           <button id="confirm-cancel" type="button">取消</button>
           <button id="confirm-tasks" type="button">仅删除任务</button>
           <button id="confirm-all" class="danger" type="button">删除任务 + 字幕</button>
+        </div>
+      </section>
+    </div>
+    <div id="setup-dialog" class="dialog-layer" hidden>
+      <section class="dialog setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+        <span class="dialog-eyebrow">首次使用</span>
+        <h2 id="setup-title">完成拾幕配置</h2>
+        <p>按顺序完成以下项目即可开始使用。现在跳过也没关系，未完成项目会保留在运行概览中。</p>
+        <div id="setup-dialog-steps" class="setup-dialog-steps"></div>
+        <div class="dialog-actions">
+          <button id="setup-skip" type="button">暂时跳过</button>
+          <button id="setup-continue" class="primary" type="button">继续设置</button>
         </div>
       </section>
     </div>

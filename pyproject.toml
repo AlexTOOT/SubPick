@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subtitle-sidecar"
-version = "0.5.0"
+version = "0.6.0"
 description = "SubPick: a lightweight MoviePilot subtitle sidecar"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -31,7 +31,7 @@ Issues = "https://github.com/AlexTOOT/SubPick/issues"
 dev = [
   "pytest>=8.2.0",
   "pytest-cov>=5.0.0",
-  "ruff>=0.5.0",
+  "ruff==0.15.22",
 ]
 
 [tool.pytest.ini_options]

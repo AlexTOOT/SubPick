@@ -264,7 +264,11 @@ def test_diagnostics_is_local_only_redacted_and_degraded_when_checks_fail(
         },
         "next_provider_ready_seconds": 0.0,
     }
-    assert body["jellyfin"] == {"configured": True}
+    assert body["jellyfin"] == {
+        "configured": True,
+        "connected": False,
+        "last_checked_at": None,
+    }
     assert "paths" not in body
     assert all(tool["status"] == "degraded" for tool in body["tools"])
     assert "jellyfin.example.invalid" not in serialized
@@ -348,6 +352,50 @@ def test_server_token_settings_are_plaintext_and_persist_across_restart(tmp_path
 
     assert disabled.json() == {"token": ""}
     assert unprotected.status_code == 200
+
+
+def test_moviepilot_connection_is_verified_by_first_authenticated_callback(tmp_path):
+    media_file = tmp_path / "Movie.mkv"
+    media_file.write_bytes(b"video")
+    app = create_app(
+        data_dir=tmp_path / "data",
+        token="moviepilot-token",
+        job_processor=lambda task_id: None,
+    )
+
+    with TestClient(app) as client:
+        before = client.get("/api/v1/diagnostics").json()
+        callback = client.post(
+            "/api/v1/add-job",
+            json={"physical_video_file_full_path": str(media_file)},
+            headers={"Authorization": "Bearer moviepilot-token"},
+        )
+        after = client.get("/api/v1/diagnostics").json()
+
+    assert callback.status_code == 200
+    assert before["moviepilot"]["connected"] is False
+    assert before["moviepilot"]["token_configured"] is True
+    assert after["moviepilot"]["connected"] is True
+    assert after["moviepilot"]["last_received_path"] == str(media_file)
+    assert after["moviepilot"]["last_callback_at"]
+
+
+def test_settings_backup_can_be_exported_and_imported(tmp_path):
+    app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
+
+    with TestClient(app) as client:
+        client.put("/api/v1/server/settings", json={"token": "backup-token"})
+        exported = client.get("/api/v1/settings/export")
+        client.put("/api/v1/server/settings", json={"token": "changed-token"})
+        imported = client.put("/api/v1/settings/import", json=exported.json())
+        restored = client.get("/api/v1/server/settings")
+
+    assert exported.status_code == 200
+    assert "attachment; filename=subpick-settings.json" in exported.headers[
+        "content-disposition"
+    ]
+    assert imported.json() == {"imported": True, "restart_required": False}
+    assert restored.json() == {"token": "backup-token"}
 
 
 def test_add_job_requires_bearer_token_when_configured(token_client):

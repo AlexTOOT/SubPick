@@ -71,6 +71,11 @@ class JellyfinSettingsResponse(BaseModel):
     api_key_configured: bool
 
 
+class JellyfinConnectionCheckResponse(BaseModel):
+    connected: bool
+    library_count: int
+
+
 class GitHubSettingsRequest(BaseModel):
     api_key: str | None = None
 
@@ -559,6 +564,39 @@ class ProviderDiagnosticsResponse(BaseModel):
 
 class JellyfinDiagnosticResponse(BaseModel):
     configured: bool
+    connected: bool = False
+    last_checked_at: str | None = None
+
+
+class MoviePilotDiagnosticResponse(BaseModel):
+    token_configured: bool
+    connected: bool
+    last_callback_at: str | None = None
+    last_received_path: str | None = None
+
+
+class SetupStepResponse(BaseModel):
+    id: str
+    label: str
+    status: str
+    target_view: str
+    target_section: str | None = None
+    help: str | None = None
+
+
+class SetupNotificationResponse(BaseModel):
+    id: str
+    level: str
+    title: str
+    message: str
+    target_view: str
+    target_section: str | None = None
+
+
+class SetupStatusResponse(BaseModel):
+    completed: bool
+    steps: list[SetupStepResponse]
+    notifications: list[SetupNotificationResponse]
 
 
 class DiagnosticsResponse(BaseModel):
@@ -569,8 +607,13 @@ class DiagnosticsResponse(BaseModel):
     queue: QueueDiagnosticResponse
     providers: ProviderDiagnosticsResponse
     jellyfin: JellyfinDiagnosticResponse
+    moviepilot: MoviePilotDiagnosticResponse
+    setup: SetupStatusResponse
     tools: list[ToolDiagnosticResponse]
+    config_file: PathDiagnosticResponse
     data_dir: PathDiagnosticResponse
+    cache_dir: PathDiagnosticResponse
+    media_dir: PathDiagnosticResponse
     database: PathDiagnosticResponse
     logging: LoggingDiagnosticResponse
     checks: list[DiagnosticCheckResponse]

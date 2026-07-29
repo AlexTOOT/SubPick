@@ -28,6 +28,48 @@ def test_default_settings_are_safe(tmp_path: Path) -> None:
     assert settings.providers.zimuku.moviepilot_ocr_url == "http://moviepilot-ocr:9899"
 
 
+def test_subpick_home_creates_single_directory_runtime_layout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    appdata = tmp_path / "subpick"
+    monkeypatch.setenv("SUBPICK_HOME", str(appdata))
+
+    settings = load_settings()
+
+    assert settings.appdata_dir == appdata
+    assert settings.runtime_config_path == appdata / "config.yaml"
+    assert settings.data_dir == appdata / "data"
+    assert settings.cache_dir == appdata / "cache"
+    assert settings.runtime_config_path.is_file()
+    assert settings.data_dir.is_dir()
+    assert settings.cache_dir.is_dir()
+    payload = yaml.safe_load(settings.runtime_config_path.read_text(encoding="utf-8"))
+    assert payload["paths"]["mappings"] == []
+    assert payload["server"]["token"] == ""
+    assert payload["providers"]["zimuku"]["moviepilot_ocr_url"] == (
+        "http://moviepilot-ocr:9899"
+    )
+
+
+def test_subpick_home_does_not_replace_existing_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    appdata = tmp_path / "subpick"
+    appdata.mkdir()
+    config_path = appdata / "config.yaml"
+    config_path.write_text("queue:\n  search_interval_seconds: 12\n", encoding="utf-8")
+    monkeypatch.setenv("SUBPICK_HOME", str(appdata))
+
+    settings = load_settings()
+
+    assert settings.queue.search_interval_seconds == 12
+    assert config_path.read_text(encoding="utf-8") == (
+        "queue:\n  search_interval_seconds: 12\n"
+    )
+
+
 def test_path_mapping_rewrites_prefix() -> None:
     mapping = PathMapping(from_path="/moviepilot/media", to_path="/media")
 

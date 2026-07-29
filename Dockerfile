@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
+    SUBPICK_HOME=/appdata \
     PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app

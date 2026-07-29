@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any
 
@@ -234,6 +235,9 @@ class AppSettings(BaseSettings):
     )
 
     data_dir: Path = Path("/data")
+    cache_dir: Path = Path("/cache")
+    appdata_dir: Path | None = Field(default=None, exclude=True)
+    runtime_config_path: Path | None = Field(default=None, exclude=True)
     config_version: int = Field(default=1, ge=1)
     server: ServerSettings = Field(default_factory=ServerSettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
@@ -268,9 +272,11 @@ def load_settings(
     token: str | None = None,
 ) -> AppSettings:
     resolved_config_path = config_path
-    default_config_path = Path("/config/config.yaml")
-    if resolved_config_path is None and default_config_path.exists():
-        resolved_config_path = default_config_path
+    appdata_value = os.environ.get("SUBPICK_HOME", "").strip()
+    appdata_dir = Path(appdata_value) if appdata_value else None
+    if resolved_config_path is None and appdata_dir is not None:
+        _ensure_appdata_layout(appdata_dir)
+        resolved_config_path = appdata_dir / "config.yaml"
 
     payload: dict[str, Any] = {}
     if resolved_config_path is not None and resolved_config_path.exists():
@@ -281,8 +287,72 @@ def load_settings(
 
     if data_dir is not None:
         payload["data_dir"] = data_dir
+        payload.setdefault("cache_dir", data_dir / "cache")
+    elif appdata_dir is not None and "SUBTITLE_SIDECAR_DATA_DIR" not in os.environ:
+        payload.setdefault("data_dir", appdata_dir / "data")
+        if "SUBTITLE_SIDECAR_CACHE_DIR" not in os.environ:
+            payload.setdefault("cache_dir", appdata_dir / "cache")
 
     if token is not None:
         payload["server"] = _deep_merge(payload.get("server", {}), {"token": token})
 
+    payload["appdata_dir"] = appdata_dir
+    payload["runtime_config_path"] = resolved_config_path
     return AppSettings(**payload)
+
+
+def _ensure_appdata_layout(appdata_dir: Path) -> None:
+    appdata_dir.mkdir(parents=True, exist_ok=True)
+    (appdata_dir / "data").mkdir(parents=True, exist_ok=True)
+    (appdata_dir / "cache").mkdir(parents=True, exist_ok=True)
+    config_path = appdata_dir / "config.yaml"
+    if config_path.exists():
+        return
+    config_path.write_text(
+        yaml.safe_dump(
+            _generated_config_payload(appdata_dir),
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _generated_config_payload(appdata_dir: Path) -> dict[str, Any]:
+    return {
+        "config_version": 1,
+        "data_dir": str(appdata_dir / "data"),
+        "cache_dir": str(appdata_dir / "cache"),
+        "server": {"host": "0.0.0.0", "port": 19035, "token": ""},
+        "paths": {"mappings": []},
+        "subtitles": {
+            "preferred": "bilingual",
+            "fallback": ["zh-cn", "zh-hant"],
+            "overwrite": False,
+            "save_unsynced_on_sync_failure": False,
+            "max_candidate_attempts": 4,
+        },
+        "queue": {
+            "search_interval_seconds": 60,
+            "recover_interrupted_tasks": True,
+        },
+        "logging": {"retention_days": 30, "max_task_events": 50000},
+        "jellyfin": {"server_url": "", "api_key": "", "user_id": ""},
+        "github": {"api_key": ""},
+        "providers": {
+            "order": list(DEFAULT_PROVIDER_ORDER),
+            "subliminal": {
+                "enabled": True,
+                "providers": list(DEFAULT_SUBLIMINAL_PROVIDERS),
+                "languages": ["zh-cn", "zh-hant"],
+                "authentication": {},
+            },
+            "assrt": {"enabled": False, "token": ""},
+            "subdl": {"enabled": False, "api_key": ""},
+            "zimuku": {
+                "enabled": False,
+                "moviepilot_ocr_url": "http://moviepilot-ocr:9899",
+                "anti_captcha_api_key": "",
+            },
+        },
+    }

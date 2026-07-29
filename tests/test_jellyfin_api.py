@@ -118,6 +118,23 @@ def test_jellyfin_settings_can_be_saved_and_libraries_are_separated(tmp_path: Pa
     assert libraries_response.json()["libraries"] == fake_client.libraries
 
 
+def test_jellyfin_connection_check_records_verified_health(tmp_path: Path):
+    fake_client = FakeJellyfinClient()
+    app = create_app(data_dir=tmp_path, job_processor=lambda task_id: None)
+    app.state.jellyfin_client_factory = lambda config: fake_client
+
+    with TestClient(app) as client:
+        _save_jellyfin_settings(client)
+        before = client.get("/api/v1/diagnostics").json()
+        checked = client.post("/api/v1/jellyfin/check")
+        after = client.get("/api/v1/diagnostics").json()
+
+    assert before["jellyfin"]["connected"] is False
+    assert checked.json() == {"connected": True, "library_count": 2}
+    assert after["jellyfin"]["connected"] is True
+    assert after["jellyfin"]["last_checked_at"]
+
+
 def test_recent_jellyfin_media_is_sorted_by_jellyfin_date_across_libraries(
     tmp_path: Path,
 ):
