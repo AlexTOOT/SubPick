@@ -288,6 +288,9 @@ def load_settings(
     if data_dir is not None:
         payload["data_dir"] = data_dir
         payload.setdefault("cache_dir", data_dir / "cache")
+    elif environment_data_dir := os.environ.get("SUBTITLE_SIDECAR_DATA_DIR", "").strip():
+        if "SUBTITLE_SIDECAR_CACHE_DIR" not in os.environ:
+            payload.setdefault("cache_dir", Path(environment_data_dir) / "cache")
     elif appdata_dir is not None and "SUBTITLE_SIDECAR_DATA_DIR" not in os.environ:
         payload.setdefault("data_dir", appdata_dir / "data")
         if "SUBTITLE_SIDECAR_CACHE_DIR" not in os.environ:

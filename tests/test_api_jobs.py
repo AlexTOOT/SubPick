@@ -507,6 +507,7 @@ def test_create_app_allows_data_dir_from_environment(tmp_path: Path, monkeypatch
     app = create_app(job_processor=lambda task_id: None)
 
     assert app.state.settings.data_dir == tmp_path
+    assert app.state.settings.cache_dir == tmp_path / "cache"
 
 
 def test_default_app_processes_missing_video_in_background(tmp_path: Path):
