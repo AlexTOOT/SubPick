@@ -129,6 +129,8 @@ $remoteScript = $remoteScript.Replace("__MEDIA_PATH__", $MediaPath)
 $remoteScript = $remoteScript.Replace("__SERVICE__", $ComposeService)
 $remoteScript = $remoteScript.Replace("__HEALTH__", $HealthUrl)
 $remoteScript = $remoteScript.Replace("`r", "")
-
-Invoke-Checked $ssh ($sshArguments + @($target, $remoteScript))
+$remoteScript | & $ssh @sshArguments $target "bash -s"
+if ($LASTEXITCODE -ne 0) {
+    throw "Remote deployment script exited with code $LASTEXITCODE"
+}
 Write-Host "Deployed commit $commit to ${target}:$RemotePath"
