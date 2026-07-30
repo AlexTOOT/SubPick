@@ -71,6 +71,7 @@ test -f "$STAGE/uv.lock"
 test -f "$STAGE/Dockerfile"
 docker build -t "ghcr.io/alextoot/subpick:__COMMIT__" "$STAGE"
 cp "$STAGE/compose.yaml" "$ROOT/compose.yaml"
+sed -i "s|/volume1/SubPick:/appdata|$ROOT:/appdata|" "$ROOT/compose.yaml"
 sed -i "s|/volume1/media:/media|__MEDIA_PATH__:/media|" "$ROOT/compose.yaml"
 
 ROLLBACK_IMAGE="ghcr.io/alextoot/subpick:rollback-__COMMIT__"
