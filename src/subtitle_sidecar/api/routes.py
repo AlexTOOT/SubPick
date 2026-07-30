@@ -424,14 +424,23 @@ def create_api_router() -> APIRouter:
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
             existing = _load_jellyfin_config(request, repo)
+            server_url = payload.server_url.strip().rstrip("/")
+            api_key_changed = payload.api_key is not None
             config = {
-                "server_url": payload.server_url.strip().rstrip("/"),
+                "server_url": server_url,
                 "api_key": (
                     existing["api_key"]
                     if payload.api_key is None
                     else payload.api_key.strip()
                 ),
-                "user_id": payload.user_id.strip(),
+                "user_id": (
+                    payload.user_id.strip()
+                    or (
+                        existing["user_id"]
+                        if server_url == existing["server_url"] and not api_key_changed
+                        else ""
+                    )
+                ),
             }
             repo.set_setting(JELLYFIN_SETTING_KEY, config)
             runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
@@ -448,8 +457,9 @@ def create_api_router() -> APIRouter:
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
             config = _require_jellyfin_config(request, repo)
+        client = _jellyfin_client(request, config)
         try:
-            libraries = _jellyfin_client(request, config).list_libraries()
+            libraries = client.list_libraries()
         except Exception as error:
             with session_scope(request.app.state.engine) as session:
                 repo = Repository(session)
@@ -464,6 +474,12 @@ def create_api_router() -> APIRouter:
             raise HTTPException(status_code=502, detail="Jellyfin 连接测试失败") from error
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
+            resolved_user_id = str(getattr(client, "user_id", "") or "")
+            if resolved_user_id and resolved_user_id != config["user_id"]:
+                repo.set_setting(
+                    JELLYFIN_SETTING_KEY,
+                    {**config, "user_id": resolved_user_id},
+                )
             metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
             metadata.update(
                 {
@@ -1445,7 +1461,7 @@ def _enrich_moviepilot_task(
         if cached is not None:
             metadata = _jellyfin_metadata_from_cached_item(cached)
 
-    if jellyfin_item_id and config["server_url"] and config["api_key"] and config["user_id"]:
+    if jellyfin_item_id and config["server_url"] and config["api_key"]:
         try:
             metadata = _jellyfin_client(request, config).get_item(jellyfin_item_id)
         except Exception as error:
@@ -1694,8 +1710,6 @@ def _require_jellyfin_config(request: Request, repo: Repository) -> dict[str, st
     config = _load_jellyfin_config(request, repo)
     if not config["server_url"] or not config["api_key"]:
         raise HTTPException(status_code=400, detail="Jellyfin is not configured")
-    if not config["user_id"]:
-        raise HTTPException(status_code=400, detail="Jellyfin user_id is required")
     return config
 
 

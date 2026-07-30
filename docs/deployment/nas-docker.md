@@ -11,19 +11,22 @@ MoviePilot ──通知──> SubPick ──读写──> 媒体目录
 
 ## 推荐方式
 
-在 NAS 上新建一个空目录，例如 `SubPick`，把仓库根目录的
-[compose.yaml](../../compose.yaml) 放进去，或在 Docker 管理器中直接粘贴：
+在 NAS 上新建一个空目录，例如 `SubPick`，映射给 `/appdata`，作为拾幕的
+主目录。然后把仓库根目录的 [compose.yaml](../../compose.yaml) 放进去，或在
+Docker 管理器中直接粘贴：
 
 ```yaml
 services:
   subpick:
     image: ghcr.io/alextoot/subpick:latest
     container_name: subpick
+    networks:
+      - subpick
     ports:
       - "19035:19035"
     volumes:
-      - ./:/appdata
-      # 修改左侧路径；必须覆盖 MoviePilot 管理的全部电影和剧集，并允许写入。
+      - /volume1/SubPick:/appdata # 拾幕主目录
+      # 媒体库根目录，应包含电影和剧集的全部媒体，推荐与 MoviePilot 的 /media 保持一致。
       - /volume1/media:/media
     environment:
       TZ: Asia/Shanghai
@@ -34,7 +37,15 @@ services:
   moviepilot-ocr:
     image: jxxghp/moviepilot-ocr:latest
     container_name: moviepilot-ocr
+    networks:
+      - subpick
+    ports:
+      - "9899:9899"
     restart: unless-stopped
+
+networks:
+  subpick:
+    driver: bridge
 ```
 
 首次启动会自动创建：
@@ -94,16 +105,18 @@ MoviePilot 到拾幕是单向调用。保存 Token 后显示“等待验证”�
 推荐在 MoviePilot、Jellyfin 和拾幕中使用同一个容器内媒体路径 `/media`。
 这样 MoviePilot 下发的文件路径可以被拾幕直接访问，不需要额外映射。
 
-如果上游传来的路径不同，可编辑自动生成的 `config.yaml`：
+如果 MoviePilot 下发的路径不是 `/media/...`，优先直接在 Compose 中把同一个
+NAS 媒体目录额外挂载到回调使用的路径。例如回调路径以 `/mnt/media` 开头：
 
 ```yaml
-paths:
-  mappings:
-    - from: /moviepilot/media
-      to: /media
+    volumes:
+      - /volume1/media:/media
+      - /volume1/media:/mnt/media
 ```
 
-首次回调路径无法访问时，拾幕会在运行概览和系统健康页保留错误通知。
+只有多个媒体根目录无法通过 Compose 对齐时，才需要编辑 `config.yaml` 中的
+`paths.mappings`。首次回调路径无法访问时，拾幕会在运行概览和系统健康页保留
+错误通知。
 
 ## 本地 OCR
 
@@ -114,8 +127,9 @@ Zimuku 的网页流程可能出现数字验证码。示例 Compose 默认部署
 http://moviepilot-ocr:9899
 ```
 
-OCR 无需映射到 NAS 主机端口。启用 Zimuku 后，在设置页执行“实图检查 OCR”；
-检查会提交一张答案已知的测试图片，同时验证 HTTP 调用与识别结果。
+Compose 会把 OCR 的 `9899` 端口暴露到 NAS，拾幕服务本身仍通过内部 bridge
+网络访问。启用 Zimuku 后，在设置页执行“实图检查 OCR”；检查会提交一张答案
+已知的测试图片，同时验证 HTTP 调用与识别结果。
 
 ## 备份与恢复
 

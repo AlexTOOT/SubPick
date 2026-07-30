@@ -2,13 +2,13 @@ services:
   subpick:
     image: ghcr.io/alextoot/subpick:latest
     container_name: subpick
+    networks:
+      - subpick
     ports:
       - "19035:19035"
     volumes:
-      # 拾幕主目录：首次启动会自动生成 config.yaml、data/ 和 cache/。
-      - ./:/appdata
-      # 修改冒号左侧为 MoviePilot 使用的媒体根目录。
-      # 该目录应包含电影和剧集的全部媒体，并允许拾幕写入字幕文件。
+      - /volume1/SubPick:/appdata # 拾幕主目录
+      # 媒体库根目录，应包含电影和剧集的全部媒体，推荐与 MoviePilot 的 /media 保持一致。
       - /volume1/media:/media
     environment:
       TZ: Asia/Shanghai
@@ -19,4 +19,12 @@ services:
   moviepilot-ocr:
     image: jxxghp/moviepilot-ocr:latest
     container_name: moviepilot-ocr
+    networks:
+      - subpick
+    ports:
+      - "9899:9899"
     restart: unless-stopped
+
+networks:
+  subpick:
+    driver: bridge

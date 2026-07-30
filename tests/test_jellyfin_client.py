@@ -148,3 +148,48 @@ def test_jellyfin_client_refreshes_single_item() -> None:
             "http://jellyfin.test/Items/movie-1/Refresh?metadataRefreshMode=None&imageRefreshMode=None",
         )
     ]
+
+
+def test_jellyfin_client_discovers_an_available_admin_user() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/Users":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "Id": "regular-user",
+                        "Policy": {"IsAdministrator": False, "IsDisabled": False},
+                    },
+                    {
+                        "Id": "admin-user",
+                        "Policy": {"IsAdministrator": True, "IsDisabled": False},
+                    },
+                ],
+            )
+        if request.url.path == "/Users/admin-user/Views":
+            return httpx.Response(
+                200,
+                json={
+                    "Items": [
+                        {
+                            "Id": "movie-lib",
+                            "Name": "电影",
+                            "CollectionType": "movies",
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    client = JellyfinClient(
+        server_url="http://jellyfin.test",
+        api_key="secret",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.list_libraries()[0]["id"] == "movie-lib"
+    assert client.user_id == "admin-user"
+    assert requests == ["/Users", "/Users/admin-user/Views"]

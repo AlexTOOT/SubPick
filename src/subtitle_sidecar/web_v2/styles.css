@@ -481,9 +481,47 @@ tbody tr:hover { background: #f7f9ff; }
 .level-warning { color: #a16400; font-weight: 800; }
 .level-info { color: var(--green); font-weight: 800; }
 
-.diagnostic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.diagnostic-card { padding: 19px; }
-.diagnostic-card h2 { margin-bottom: 14px; }
+.health-dashboard { overflow: hidden; }
+.health-dashboard-head {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  min-height: 142px;
+  padding: 24px 26px;
+  border-bottom: 1px solid var(--line);
+}
+.health-dashboard-head h2 { margin-top: 5px; font-size: 22px; }
+.health-dashboard-head p { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.health-kicker { color: var(--green); font-size: 10px; font-weight: 800; letter-spacing: 0; }
+.health-orbit { position: relative; width: 58px; height: 58px; border: 2px solid #cfd6d2; border-radius: 50%; }
+.health-orbit::before, .health-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+.health-orbit::before { inset: 7px; border: 1px solid #dfe4e1; }
+.health-orbit::after { inset: 17px; background: var(--green); }
+.health-orbit > i { position: absolute; inset: -2px; border: 2px solid transparent; border-top-color: var(--green); border-radius: 50%; transform: rotate(35deg); }
+.health-orbit.warning::after { background: #bc7a08; }
+.health-orbit.warning > i { border-top-color: #bc7a08; }
+.health-dashboard-meta { display: flex; gap: 8px; }
+.health-dashboard-meta span { min-width: 116px; padding: 13px 15px; border-left: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.health-dashboard-meta b { display: block; margin-bottom: 3px; color: var(--ink); font-size: 18px; }
+.health-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.health-section { min-width: 0; padding: 21px 26px 24px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.health-section:nth-child(2n) { border-right: 0; }
+.health-section h3 { margin-bottom: 13px; font-size: 12px; }
+.health-section > div { display: grid; gap: 4px; }
+.health-status-row { display: grid; min-height: 32px; grid-template-columns: 8px minmax(90px, 1fr) auto; align-items: center; gap: 9px; }
+.health-status-row > i { width: 7px; height: 7px; border-radius: 50%; background: #a8a8b0; }
+.health-status-row > i.ok { background: #1a9a70; }
+.health-status-row > i.warning { background: #c4861a; }
+.health-status-row b { overflow: hidden; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.health-status-row small { color: var(--muted); font-size: 10px; text-align: right; }
+.health-version-details { padding: 15px 26px 20px; }
+.health-version-details summary { color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; }
+.health-version-details .component-list { margin-top: 16px; }
 .component-list { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px 16px; font-size: 12px; }
 .component-list dt { color: var(--muted); }
 .component-list dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
@@ -600,6 +638,39 @@ tbody tr:hover { background: #f7f9ff; }
 .setup-dialog-step span small { display: block; }
 .setup-dialog-step span small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .setup-dialog-step > b { color: var(--muted); }
+.health-dialog { display: flex; width: min(720px, 100%); max-height: min(820px, calc(100vh - 40px)); flex-direction: column; padding: 0; overflow: hidden; }
+.health-dialog-header { display: flex; min-height: 78px; align-items: center; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--line); }
+.health-dialog-header .dialog-eyebrow { margin-bottom: 4px; }
+.health-run-summary { padding: 20px 22px; background: #f5f8f6; border-bottom: 1px solid var(--line); }
+.health-run-summary > div:first-child { display: flex; align-items: center; justify-content: space-between; }
+.health-run-summary > div:first-child strong { font-size: 17px; }
+.health-run-summary > div:first-child span { color: var(--green); font-size: 13px; font-weight: 800; }
+.health-progress { height: 7px; margin-top: 13px; overflow: hidden; border-radius: 4px; background: #dde5e1; }
+.health-progress i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--green); transition: width 180ms ease; }
+.health-run-summary dl { display: grid; grid-template-columns: repeat(4, 1fr); margin: 18px 0 0; }
+.health-run-summary dl > div { padding: 0 16px; border-right: 1px solid #d8dfdb; text-align: center; }
+.health-run-summary dl > div:first-child { padding-left: 0; }
+.health-run-summary dl > div:last-child { padding-right: 0; border-right: 0; }
+.health-run-summary dt { font-size: 20px; font-weight: 800; }
+.health-run-summary dd { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.health-check-list { display: grid; gap: 5px; min-height: 210px; padding: 14px 22px; overflow-y: auto; scrollbar-gutter: stable; }
+.health-check-row { display: grid; min-height: 49px; grid-template-columns: 10px 142px minmax(0, 1fr) 58px; align-items: center; gap: 11px; padding: 6px 10px; border-bottom: 1px solid #ededee; }
+.health-check-row > i { width: 9px; height: 9px; border: 2px solid #aaaab2; border-radius: 50%; }
+.health-check-row.running > i { border-color: #d2d9d5; border-top-color: var(--green); animation: health-spin .7s linear infinite; }
+.health-check-row.ok > i { border: 0; background: #1a9a70; box-shadow: inset 0 0 0 3px #dff5e9; }
+.health-check-row.warning > i { border: 0; background: #c4861a; box-shadow: inset 0 0 0 3px #fff0cf; }
+.health-check-row.error > i { border: 0; background: var(--coral); box-shadow: inset 0 0 0 3px #ffe1db; }
+.health-check-row.skipped > i { border: 0; background: #a7a7af; box-shadow: inset 0 0 0 3px #ececf0; }
+.health-check-row > span strong, .health-check-row > span small { display: block; }
+.health-check-row > span strong { font-size: 12px; }
+.health-check-row > span small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.health-check-row p { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.health-check-row > b { font-size: 10px; text-align: right; }
+.health-check-row.ok > b { color: #147858; }
+.health-check-row.warning > b { color: #a56b05; }
+.health-check-row.error > b { color: #b12f1e; }
+.health-dialog > .dialog-actions { padding: 14px 22px; border-top: 1px solid var(--line); }
+@keyframes health-spin { to { transform: rotate(360deg); } }
 [hidden] { display: none !important; }
 
 @media (max-width: 980px) {
@@ -621,7 +692,8 @@ tbody tr:hover { background: #f7f9ff; }
   .overview-grid, .settings-grid { grid-template-columns: 1fr; }
   .settings-span-all { grid-column: auto; }
   .compact-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .diagnostic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .health-dashboard-head { grid-template-columns: 56px minmax(0, 1fr); }
+  .health-dashboard-meta { grid-column: 1 / -1; }
 }
 
 @media (max-width: 640px) {
@@ -634,7 +706,16 @@ tbody tr:hover { background: #f7f9ff; }
   .overview-strip { grid-template-columns: 1fr 1fr; }
   .overview-strip > div { min-height: 94px; padding: 15px; }
   .overview-strip strong { font-size: 22px; }
-  .diagnostic-grid { grid-template-columns: 1fr; }
+  .health-dashboard-head { grid-template-columns: 48px minmax(0, 1fr); padding: 19px; }
+  .health-orbit { width: 46px; height: 46px; }
+  .health-dashboard-meta { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .health-dashboard-meta span { min-width: 0; }
+  .health-section-grid { grid-template-columns: 1fr; }
+  .health-section { border-right: 0; }
+  .health-run-summary dl { grid-template-columns: repeat(2, 1fr); gap: 12px 0; }
+  .health-run-summary dl > div:nth-child(2) { border-right: 0; }
+  .health-check-row { grid-template-columns: 10px minmax(90px, 1fr) 58px; }
+  .health-check-row p { grid-column: 2 / -1; }
   .segmented { width: 100%; overflow-x: auto; }
   .segmented button { flex: 0 0 auto; }
   .sort-controls { width: 100%; margin-left: 0; }

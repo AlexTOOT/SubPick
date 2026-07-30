@@ -1107,7 +1107,7 @@ class SubtitleOrchestrator:
 
     def _build_jellyfin_client(self) -> JellyfinClient | None:
         config = self._jellyfin_config()
-        if not config["server_url"] or not config["api_key"] or not config["user_id"]:
+        if not config["server_url"] or not config["api_key"]:
             return None
         factory = self.jellyfin_client_factory or JellyfinClient
         return factory(

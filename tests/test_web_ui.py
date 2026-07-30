@@ -79,6 +79,11 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert 'id="setup-dialog"' in html
     assert 'id="jellyfin-check"' in html
     assert 'id="diag-health-check"' in html
+    assert 'id="health-dialog"' in html
+    assert 'id="health-progress-bar"' in html
+    assert 'id="jellyfin-user"' not in html
+    assert "buildHealthChecks" in js
+    assert "renderHealthDialog" in js
     assert 'type="text" autocomplete="off" spellcheck="false"' in html
     assert "仅看缺失" in js
     assert "全选缺失" in js

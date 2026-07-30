@@ -29,7 +29,6 @@ jellyfin:
   # Optional defaults; these can also be saved from the Web UI settings panel.
   server_url: ""
   api_key: ""
-  user_id: ""
 
 providers:
   subdl:

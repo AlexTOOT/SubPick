@@ -41,6 +41,8 @@ const state = {
   openProviders: new Set(),
   draggedProvider: null,
   dependencyUpdates: null,
+  healthChecks: [],
+  healthRunning: false,
   toastTimer: null,
 };
 
@@ -932,34 +934,80 @@ function renderDiagnostics() {
     const latest = update.latest_version || "未知";
     return [name, `${update.current_version} → ${latest}（${update.status}）`];
   });
-  const cards = [
-    ["版本", componentRows],
-    ["Provider", Object.entries(diag.providers || {}).map(([name, value]) => [name, `${value.enabled ? "已启用" : "未启用"} · ${value.status}`])],
-    ["工具", (diag.tools || []).map((tool) => [tool.name, tool.available ? "可用" : "不可用"])],
-    ["队列", [
-      ["当前任务", diag.queue.active_task_id || "无"],
-      ["等待数量", diag.queue.queued_count],
-      ["下个搜索槽位", `${Math.ceil(diag.queue.next_provider_ready_seconds || 0)} 秒`],
-      ...Object.entries(diag.queue.provider_cooldowns || {}).map(([name, seconds]) => [`${name} 冷却`, `${Math.ceil(seconds)} 秒`]),
+  const sections = [
+    ["运行环境", [
+      ["配置文件", diag.config_file.status, diag.config_file.status === "ok"],
+      ["数据目录", diag.data_dir.status, diag.data_dir.status === "ok"],
+      ["缓存目录", diag.cache_dir.status, diag.cache_dir.status === "ok"],
+      ["媒体目录", diag.media_dir.status, diag.media_dir.status === "ok"],
+      ["数据库", diag.database.status, diag.database.status === "ok"],
     ]],
-    ["连接", [
-      ["MoviePilot", diag.moviepilot.connected ? "已连接" : diag.moviepilot.token_configured ? "等待验证" : "未配置"],
-      ["最后回调", formatTime(diag.moviepilot.last_callback_at)],
-      ["Jellyfin", diag.jellyfin.connected ? "已连接" : diag.jellyfin.configured ? "等待测试" : "未配置"],
+    ["外部连接", [
+      ["MoviePilot", diag.moviepilot.connected ? "已连接" : diag.moviepilot.token_configured ? "等待验证" : "未配置", diag.moviepilot.connected],
+      ["Jellyfin", diag.jellyfin.connected ? "已连接" : diag.jellyfin.configured ? "等待测试" : "未配置", diag.jellyfin.connected],
+      ...Object.entries(diag.providers || {}).map(([name, value]) => [
+        name,
+        value.enabled ? value.status : "未启用",
+        !value.enabled || !["unavailable", "error", "unconfigured"].includes(value.status),
+      ]),
     ]],
-    ["存储", [
-      ["配置文件", diag.config_file.status],
-      ["数据目录", diag.data_dir.status],
-      ["缓存目录", diag.cache_dir.status],
-      ["媒体目录", diag.media_dir.status],
-      ["数据库", diag.database.status],
-      ["日志保留", `${diag.logging.retention_days} 天`],
+    ["本地工具", (diag.tools || []).map((tool) => [
+      tool.name,
+      tool.available ? "可用" : "不可用",
+      tool.available,
+    ])],
+    ["队列状态", [
+      ["当前任务", diag.queue.active_task_id || "无", true],
+      ["等待数量", diag.queue.queued_count, true],
+      ["下个搜索槽位", `${Math.ceil(diag.queue.next_provider_ready_seconds || 0)} 秒`, true],
+      ...Object.entries(diag.queue.provider_cooldowns || {}).map(([name, seconds]) => [
+        `${name} 冷却`,
+        `${Math.ceil(seconds)} 秒`,
+        true,
+      ]),
     ]],
-    ["兼容性", [["配置版本", diag.compatibility.config_version], ["数据库版本", diag.compatibility.database_schema_version], ["状态", diag.compatibility.status]]],
   ];
-  $("#diagnostic-grid").innerHTML = cards.map(([title, rows]) => `
-    <section class="panel diagnostic-card"><h2>${escapeHtml(title)}</h2><dl class="component-list">${rows.map(([name, value]) => `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value ?? "未知")}</dd>`).join("")}</dl></section>
-  `).join("");
+  const localIssues = (diag.checks || []).filter((item) => item.status !== "ok").length;
+  const connectionIssues = [
+    diag.jellyfin.configured && !diag.jellyfin.connected,
+    diag.moviepilot.token_configured && !diag.moviepilot.connected,
+  ].filter(Boolean).length;
+  const issueCount = localIssues + connectionIssues;
+  $("#diagnostic-grid").innerHTML = `
+    <div class="health-dashboard-head">
+      <div class="health-orbit ${issueCount ? "warning" : "ok"}" aria-hidden="true"><i></i></div>
+      <div>
+        <span class="health-kicker">SUBPICK ${escapeHtml(diag.version)}</span>
+        <h2>${issueCount ? "有项目需要确认" : "系统运行正常"}</h2>
+        <p>${issueCount ? `${issueCount} 个项目尚未就绪，运行完整检查可查看详情。` : "核心目录、数据库与本地工具均处于可用状态。"}</p>
+      </div>
+      <div class="health-dashboard-meta">
+        <span><b>${Object.values(diag.providers || {}).filter((item) => item.enabled).length}</b> 个 Provider</span>
+        <span><b>${diag.logging.retention_days}</b> 天日志保留</span>
+      </div>
+    </div>
+    <div class="health-section-grid">${sections.map(([title, rows]) => `
+      <section class="health-section">
+        <h3>${escapeHtml(title)}</h3>
+        <div>${rows.map(([name, value, ok]) => `
+          <span class="health-status-row">
+            <i class="${ok ? "ok" : "warning"}" aria-hidden="true"></i>
+            <b>${escapeHtml(name)}</b>
+            <small>${escapeHtml(value ?? "未知")}</small>
+          </span>
+        `).join("")}</div>
+      </section>
+    `).join("")}</div>
+    <details class="health-version-details">
+      <summary>组件与兼容性信息</summary>
+      <dl class="component-list">
+        ${componentRows.map(([name, value]) => `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value ?? "未知")}</dd>`).join("")}
+        <dt>配置版本</dt><dd>${escapeHtml(diag.compatibility.config_version)}</dd>
+        <dt>数据库版本</dt><dd>${escapeHtml(diag.compatibility.database_schema_version)}</dd>
+        <dt>兼容性</dt><dd>${escapeHtml(diag.compatibility.status)}</dd>
+      </dl>
+    </details>
+  `;
 }
 
 function checked(value) {
@@ -1162,7 +1210,6 @@ async function loadSettings() {
     $("#jellyfin-key").value = "";
     $("#jellyfin-key").placeholder = jellyfin.api_key_configured ? "已配置，留空保留现有值" : "请输入 API Key";
     $("#jellyfin-key-status").textContent = jellyfin.api_key_configured ? "API Key 已配置" : "尚未配置 API Key";
-    $("#jellyfin-user").value = jellyfin.user_id || "";
     $("#github-key").value = "";
     $("#github-key").placeholder = github.api_key_configured ? "已配置，留空保留现有值" : "可选";
     $("#github-key-status").textContent = github.api_key_configured
@@ -1199,10 +1246,7 @@ async function saveProviderOrder() {
 
 async function saveJellyfin(event) {
   event.preventDefault();
-  const body = {
-    server_url: $("#jellyfin-url").value.trim(),
-    user_id: $("#jellyfin-user").value.trim(),
-  };
+  const body = { server_url: $("#jellyfin-url").value.trim() };
   if ($("#jellyfin-key").value.trim()) body.api_key = $("#jellyfin-key").value.trim();
   try {
     const { payload } = await api("/api/v1/jellyfin/settings", {
@@ -1240,24 +1284,174 @@ function disconnectOverviewEvents() {
   state.overviewSource = null;
 }
 
-async function runHealthCheck() {
-  showToast("正在运行系统健康检查");
-  const failures = [];
-  if (state.diagnostics?.jellyfin?.configured) {
-    try {
-      await api("/api/v1/jellyfin/check", { method: "POST" });
-    } catch (error) {
-      failures.push(`Jellyfin：${error.message}`);
+function healthResult(status, detail) {
+  return { status, detail };
+}
+
+function localHealthResult(ok, success, failure) {
+  return Promise.resolve(healthResult(ok ? "ok" : "error", ok ? success : failure));
+}
+
+function buildHealthChecks(diag) {
+  const pathChecks = [
+    ["config", "配置文件", diag.config_file, "配置文件可读取", "配置文件不可用"],
+    ["data", "数据目录", diag.data_dir, "数据目录可写", "数据目录不可用"],
+    ["cache", "缓存目录", diag.cache_dir, "缓存目录可写", "缓存目录不可用"],
+    ["media", "媒体目录", diag.media_dir, "媒体目录可访问", "媒体目录不可用"],
+    ["database", "数据库", diag.database, "SQLite 数据库可用", "数据库不可用"],
+  ].map(([id, label, item, success, failure]) => ({
+    id,
+    group: "运行环境",
+    label,
+    status: "pending",
+    detail: "等待检查",
+    run: () => localHealthResult(item.status === "ok", success, `${failure}：${item.status}`),
+  }));
+  const toolChecks = (diag.tools || []).map((tool) => ({
+    id: `tool-${tool.name}`,
+    group: "本地工具",
+    label: tool.name,
+    status: "pending",
+    detail: "等待检查",
+    run: () => localHealthResult(tool.available, "命令可执行", "未安装或无法执行"),
+  }));
+  const connectionChecks = [
+    {
+      id: "moviepilot",
+      group: "连接",
+      label: "MoviePilot",
+      status: "pending",
+      detail: "等待检查",
+      run: () => Promise.resolve(diag.moviepilot.connected
+        ? healthResult("ok", `已验证，最后回调 ${formatTime(diag.moviepilot.last_callback_at)}`)
+        : healthResult("warning", diag.moviepilot.token_configured ? "等待首次鉴权回调" : "尚未配置 API Token")),
+    },
+    {
+      id: "jellyfin",
+      group: "连接",
+      label: "Jellyfin",
+      status: "pending",
+      detail: "等待检查",
+      run: async () => {
+        if (!diag.jellyfin.configured) return healthResult("warning", "尚未配置");
+        const { payload } = await api("/api/v1/jellyfin/check", { method: "POST" });
+        return healthResult("ok", `连接成功，发现 ${payload.library_count} 个媒体库`);
+      },
+    },
+  ];
+  const providerChecks = Object.entries(diag.providers || {}).map(([name, diagnostic]) => {
+    const settings = state.providerSettings[name] || {};
+    const adapter = state.providerAdapters.find((item) => item.name === name);
+    const label = adapter?.display_name || name;
+    const base = {
+      id: `provider-${name}`,
+      group: "Provider",
+      label,
+      status: "pending",
+      detail: "等待检查",
+    };
+    if (!diagnostic.enabled) {
+      return { ...base, run: () => Promise.resolve(healthResult("skipped", "未启用")) };
     }
+    if (name === "assrt" && settings.token_configured) {
+      return { ...base, run: async () => {
+        const { payload } = await api("/api/v1/providers/assrt/quota", { method: "POST" });
+        return healthResult("ok", `服务可用，当前配额 ${payload.quota}`);
+      } };
+    }
+    if (name === "subdl" && settings.api_key_configured) {
+      return { ...base, run: async () => {
+        const { payload } = await api("/api/v1/providers/subdl/usage", { method: "POST" });
+        return healthResult("ok", `服务可用，搜索额度 ${payload.search_remaining ?? "?"}/${payload.search_limit ?? "?"}`);
+      } };
+    }
+    if (name === "zimuku" && settings.moviepilot_ocr_configured) {
+      return { ...base, run: async () => {
+        const { payload } = await api("/api/v1/providers/zimuku/ocr-check", { method: "POST" });
+        return healthResult("ok", `OCR 实图识别成功，耗时 ${payload.duration_ms} ms`);
+      } };
+    }
+    if (name === "zimuku" && settings.anti_captcha_api_key_configured) {
+      return { ...base, run: async () => {
+        const { payload } = await api("/api/v1/providers/zimuku/captcha-balance", { method: "POST" });
+        return healthResult("ok", `Anti-Captcha 可用，余额 ${Number(payload.balance).toFixed(3)} USD`);
+      } };
+    }
+    return {
+      ...base,
+      run: () => Promise.resolve(
+        diagnostic.status === "ok"
+          ? healthResult("ok", "本地适配器可用")
+          : healthResult("warning", diagnostic.status === "unconfigured" ? "尚未配置认证信息" : diagnostic.status)
+      ),
+    };
+  });
+  return [...pathChecks, ...toolChecks, ...connectionChecks, ...providerChecks];
+}
+
+function renderHealthDialog() {
+  const checks = state.healthChecks;
+  const finished = checks.filter((item) => !["pending", "running"].includes(item.status)).length;
+  const percent = checks.length ? Math.round((finished / checks.length) * 100) : 0;
+  const ok = checks.filter((item) => item.status === "ok").length;
+  const warning = checks.filter((item) => item.status === "warning").length;
+  const errors = checks.filter((item) => item.status === "error").length;
+  $("#health-run-percent").textContent = `${percent}%`;
+  $("#health-progress-bar").style.width = `${percent}%`;
+  $("#health-run-state").textContent = state.healthRunning
+    ? "正在检查"
+    : errors ? "检查完成，有错误" : warning ? "检查完成，有项目待确认" : "检查完成";
+  $("#health-count-total").textContent = String(checks.length);
+  $("#health-count-ok").textContent = String(ok);
+  $("#health-count-warning").textContent = String(warning);
+  $("#health-count-error").textContent = String(errors);
+  $("#health-check-list").innerHTML = checks.map((item) => `
+    <div class="health-check-row ${escapeHtml(item.status)}">
+      <i aria-hidden="true"></i>
+      <span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.group)}</small></span>
+      <p>${escapeHtml(item.detail)}</p>
+      <b>${escapeHtml({
+        pending: "等待",
+        running: "检查中",
+        ok: "正常",
+        warning: "警告",
+        error: "错误",
+        skipped: "未启用",
+      }[item.status] || item.status)}</b>
+    </div>
+  `).join("");
+  $("#health-dialog-rerun").disabled = state.healthRunning;
+  $("#diag-health-check").disabled = state.healthRunning;
+}
+
+function closeHealthDialog() {
+  $("#health-dialog").hidden = true;
+}
+
+async function runHealthCheck() {
+  if (state.healthRunning) return;
+  $("#health-dialog").hidden = false;
+  state.healthRunning = true;
+  await loadDiagnostics().catch(() => {});
+  state.healthChecks = buildHealthChecks(state.diagnostics);
+  renderHealthDialog();
+  for (const check of state.healthChecks) {
+    check.status = "running";
+    check.detail = "正在检查…";
+    renderHealthDialog();
+    try {
+      Object.assign(check, await check.run());
+    } catch (error) {
+      check.status = "error";
+      check.detail = error.message;
+    }
+    renderHealthDialog();
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
   }
-  state.providerAutoCheckStarted = false;
-  await autoCheckProviders();
-  await loadDiagnostics();
-  if (failures.length) {
-    showToast(`健康检查完成，${failures.join("；")}`, true);
-  } else {
-    showToast("健康检查完成");
-  }
+  state.healthRunning = false;
+  await loadDiagnostics().catch(() => {});
+  renderHealthDialog();
+  showToast("健康检查完成");
 }
 
 async function checkJellyfin() {
@@ -1681,6 +1875,9 @@ function bindEvents() {
   $("#logs-clear").addEventListener("click", () => { state.logs = []; renderLogs(); });
   $("#diag-updates").addEventListener("click", checkUpdates);
   $("#diag-health-check").addEventListener("click", runHealthCheck);
+  $("#health-dialog-close").addEventListener("click", closeHealthDialog);
+  $("#health-dialog-dismiss").addEventListener("click", closeHealthDialog);
+  $("#health-dialog-rerun").addEventListener("click", runHealthCheck);
   $("#diag-export").addEventListener("click", () => { window.location.href = "/api/v1/diagnostics/export"; });
   $("#jellyfin-form").addEventListener("submit", saveJellyfin);
   $("#jellyfin-check").addEventListener("click", checkJellyfin);

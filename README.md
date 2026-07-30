@@ -28,22 +28,24 @@ WebUI 中提供任务、候选、实时日志和系统健康状态。
 
 ## 快速部署
 
-1. 在 NAS 上新建一个空目录，例如 `SubPick`。
-2. 在 Docker 管理器中新建 Compose 项目，粘贴下面的内容。
-3. 只修改媒体目录映射中冒号左侧的 NAS 路径。
+1. 在 NAS 上新建一个空目录，例如 `SubPick`，映射给 `/appdata`，作为容器
+   主目录，用来存放配置文件、数据库和缓存等信息。
+2. 在 Docker 管理器中新建 Compose 项目，粘贴下面的内容。这会同时创建
+   字幕下载服务和验证码识别服务。
+3. 修改 `/volume1/SubPick` 和 `/volume1/media`，使其指向 NAS 上的实际目录。
 
 ```yaml
 services:
   subpick:
     image: ghcr.io/alextoot/subpick:latest
     container_name: subpick
+    networks:
+      - subpick
     ports:
       - "19035:19035"
     volumes:
-      # 拾幕主目录：首次启动会自动生成 config.yaml、data/ 和 cache/。
-      - ./:/appdata
-      # 修改冒号左侧为 MoviePilot 使用的媒体根目录。
-      # 该目录应包含电影和剧集的全部媒体，并允许拾幕写入字幕文件。
+      - /volume1/SubPick:/appdata # 拾幕主目录
+      # 媒体库根目录，应包含电影和剧集的全部媒体，推荐与 MoviePilot 的 /media 保持一致。
       - /volume1/media:/media
     environment:
       TZ: Asia/Shanghai
@@ -54,7 +56,15 @@ services:
   moviepilot-ocr:
     image: jxxghp/moviepilot-ocr:latest
     container_name: moviepilot-ocr
+    networks:
+      - subpick
+    ports:
+      - "9899:9899"
     restart: unless-stopped
+
+networks:
+  subpick:
+    driver: bridge
 ```
 
 也可以直接下载仓库中的 [compose.yaml](compose.yaml)。
@@ -84,19 +94,32 @@ MoviePilot 与拾幕处于同一 Docker 网络时，也可以使用
 `http://subpick:19035`。拾幕只有在成功收到一次鉴权回调后才会把状态从
 “等待验证”改为“已连接”。
 
-回调路径必须能在拾幕容器内访问。推荐让 MoviePilot、Jellyfin 和拾幕都把同一
-媒体根目录映射为 `/media`。若首次任务的路径无法访问，运行概览会给出持久通知，
-再按需要配置 `config.yaml` 中的 `paths.mappings`。
+回调路径必须能在拾幕容器内访问。最简单的方式是让 MoviePilot、Jellyfin 和拾幕
+都把同一媒体根目录映射为 `/media`，这样无需修改 `config.yaml`。
+
+如果 MoviePilot 下发的路径不是 `/media/...`，也可以直接修改 Compose：保留
+`/media` 映射，再把同一个 NAS 目录额外挂载到 MoviePilot 实际使用的容器路径。
+例如回调路径以 `/mnt/media` 开头时，增加：
+
+```yaml
+      - /volume1/media:/mnt/media
+```
+
+只有存在多个媒体根目录、且无法通过 Compose 对齐时，才需要使用
+`config.yaml` 中的 `paths.mappings`。首次任务路径无法访问时，运行概览会给出
+持久通知。
 
 ## Jellyfin
 
-在“设置 → Jellyfin 配置”中填写地址、API Key 和 User ID，然后执行“测试连接”。
+在“设置 → Jellyfin 配置”中填写地址和 API Key，然后执行“测试连接”。拾幕会
+自动发现可用的 Jellyfin 用户，不需要手动查找或填写 User ID。
 媒体库扫描只更新字幕覆盖状态，不会自动创建下载任务。
 
 ## Zimuku 与 OCR
 
 Compose 默认启动本地 MoviePilot OCR，Zimuku 默认访问
-`http://moviepilot-ocr:9899`，无需暴露额外 NAS 端口。启用 Zimuku 后，请在
+`http://moviepilot-ocr:9899`。Compose 同时把 `9899` 暴露到 NAS，便于直接
+排查 OCR 服务；拾幕容器之间仍通过内部 bridge 网络访问。启用 Zimuku 后，请在
 Provider 设置中执行一次 OCR 实图测试；仅能打开 OCR 根地址不代表识别可用。
 
 ## 数据、备份与升级

@@ -161,8 +161,34 @@ class JellyfinClient:
 
     def _require_user_id(self) -> str:
         if not self.user_id:
-            raise ValueError("Jellyfin user_id is required")
+            self.user_id = self._discover_user_id()
         return self.user_id
+
+    def _discover_user_id(self) -> str:
+        with httpx.Client(
+            base_url=self.server_url,
+            headers={"X-Emby-Token": self.api_key},
+            timeout=self.timeout,
+            transport=self.transport,
+        ) as client:
+            response = client.get("/Users")
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("Jellyfin users response must be a JSON array")
+        users = [
+            item
+            for item in payload
+            if isinstance(item, dict)
+            and item.get("Id")
+            and not (item.get("Policy") or {}).get("IsDisabled", False)
+        ]
+        if not users:
+            raise ValueError("Jellyfin has no available users")
+        users.sort(
+            key=lambda item: not bool((item.get("Policy") or {}).get("IsAdministrator"))
+        )
+        return str(users[0]["Id"])
 
     def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
         image_tags = item.get("ImageTags") or {}

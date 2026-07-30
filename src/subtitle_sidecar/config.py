@@ -340,7 +340,7 @@ def _generated_config_payload(appdata_dir: Path) -> dict[str, Any]:
             "recover_interrupted_tasks": True,
         },
         "logging": {"retention_days": 30, "max_task_events": 50000},
-        "jellyfin": {"server_url": "", "api_key": "", "user_id": ""},
+        "jellyfin": {"server_url": "", "api_key": ""},
         "github": {"api_key": ""},
         "providers": {
             "order": list(DEFAULT_PROVIDER_ORDER),

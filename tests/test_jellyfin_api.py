@@ -135,6 +135,25 @@ def test_jellyfin_connection_check_records_verified_health(tmp_path: Path):
     assert after["jellyfin"]["last_checked_at"]
 
 
+def test_jellyfin_connection_check_persists_automatically_discovered_user(tmp_path: Path):
+    fake_client = FakeJellyfinClient()
+    fake_client.user_id = "discovered-user"
+    app = create_app(data_dir=tmp_path, job_processor=lambda task_id: None)
+    app.state.jellyfin_client_factory = lambda config: fake_client
+
+    with TestClient(app) as client:
+        saved = client.put(
+            "/api/v1/jellyfin/settings",
+            json={"server_url": "http://jellyfin.test", "api_key": "secret"},
+        )
+        checked = client.post("/api/v1/jellyfin/check")
+        settings = client.get("/api/v1/jellyfin/settings")
+
+    assert saved.status_code == 200
+    assert checked.status_code == 200
+    assert settings.json()["user_id"] == "discovered-user"
+
+
 def test_recent_jellyfin_media_is_sorted_by_jellyfin_date_across_libraries(
     tmp_path: Path,
 ):

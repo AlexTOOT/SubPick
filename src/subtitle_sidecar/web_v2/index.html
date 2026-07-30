@@ -196,10 +196,10 @@
 
           <section id="view-diagnostics" class="view" aria-labelledby="diag-title">
             <div class="view-heading">
-              <div><h2 id="diag-title">系统健康检查</h2><p>目录、连接、组件、工具与运行状态</p></div>
+              <div><h2 id="diag-title">系统健康</h2><p>快速了解运行环境与外部服务状态</p></div>
               <div class="actions"><button id="diag-health-check" class="primary" type="button">运行健康检查</button><button id="diag-updates" type="button">检查组件更新</button><button id="diag-export" type="button">导出诊断</button></div>
             </div>
-            <div id="diagnostic-grid" class="diagnostic-grid"><p class="empty">正在读取诊断信息</p></div>
+            <section id="diagnostic-grid" class="panel health-dashboard"><p class="empty">正在读取诊断信息</p></section>
           </section>
 
           <section id="view-settings" class="view" aria-labelledby="settings-title">
@@ -210,7 +210,7 @@
                 <label>Jellyfin 地址<input id="jellyfin-url" type="url" placeholder="http://jellyfin:8096"></label>
                 <label>API Key<input id="jellyfin-key" type="password" autocomplete="off" placeholder="留空表示保留现有值"></label>
                 <p id="jellyfin-key-status" class="settings-note"></p>
-                <label>User ID<input id="jellyfin-user" type="text"></label>
+                <p class="settings-note">用户身份会在测试连接时自动发现，无需手动填写 User ID。</p>
                 <div class="form-actions split-actions">
                   <button id="jellyfin-check" type="button">测试连接</button>
                   <button class="primary" type="submit">保存 Jellyfin 配置</button>
@@ -278,6 +278,32 @@
         <div class="dialog-actions">
           <button id="setup-skip" type="button">暂时跳过</button>
           <button id="setup-continue" class="primary" type="button">继续设置</button>
+        </div>
+      </section>
+    </div>
+    <div id="health-dialog" class="dialog-layer" hidden>
+      <section class="dialog health-dialog" role="dialog" aria-modal="true" aria-labelledby="health-dialog-title">
+        <header class="health-dialog-header">
+          <div><span class="dialog-eyebrow">系统诊断</span><h2 id="health-dialog-title">健康检查</h2></div>
+          <button id="health-dialog-close" class="icon-button" type="button" aria-label="关闭健康检查">×</button>
+        </header>
+        <div class="health-run-summary">
+          <div>
+            <strong id="health-run-state">准备检查</strong>
+            <span id="health-run-percent">0%</span>
+          </div>
+          <div class="health-progress" aria-label="健康检查进度"><i id="health-progress-bar"></i></div>
+          <dl>
+            <div><dt id="health-count-total">0</dt><dd>检查项</dd></div>
+            <div><dt id="health-count-ok">0</dt><dd>正常</dd></div>
+            <div><dt id="health-count-warning">0</dt><dd>警告</dd></div>
+            <div><dt id="health-count-error">0</dt><dd>错误</dd></div>
+          </dl>
+        </div>
+        <div id="health-check-list" class="health-check-list"></div>
+        <div class="dialog-actions">
+          <button id="health-dialog-dismiss" type="button">关闭</button>
+          <button id="health-dialog-rerun" class="primary" type="button">重新检查</button>
         </div>
       </section>
     </div>
