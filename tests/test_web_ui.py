@@ -107,6 +107,13 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert ".log-provider-name" in css
     assert 'href="/legacy"' not in html
     assert "清空显示" in html
+    assert html.count('<h2 id="library-title">媒体库</h2>') == 0
+    assert html.count('<h2 id="logs-title">实时日志</h2>') == 0
+    assert html.count('<h2 id="settings-title">设置</h2>') == 0
+    assert "浏览 Jellyfin 媒体库字幕状态，并按需创建任务" in js
+    assert "details::details-content" in css
+    assert "interpolate-size: allow-keywords" in css
+    assert '.provider-config-card[open] > summary::after { transform: rotate(90deg); }' in css
 
 
 def test_shimu_web_assets_do_not_contain_mojibake(tmp_path):

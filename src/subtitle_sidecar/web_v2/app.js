@@ -1809,7 +1809,7 @@ async function refreshCurrent() {
 const viewCopy = {
   overview: ["运行概览", "让每一部影片，都有合适的字幕"],
   tasks: ["任务工作台", "搜索、重试并排查每一个字幕任务"],
-  library: ["媒体库", "从 Jellyfin 浏览字幕覆盖状态"],
+  library: ["媒体库", "浏览 Jellyfin 媒体库字幕状态，并按需创建任务"],
   logs: ["实时日志", "只在需要时保持实时连接"],
   settings: ["设置", "连接媒体库并管理服务配置"],
 };
