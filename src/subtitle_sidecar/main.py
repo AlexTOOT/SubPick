@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
 from typing import Callable
@@ -14,6 +15,7 @@ from subtitle_sidecar import DATABASE_SCHEMA_VERSION, RUNTIME_METADATA_SETTING_K
 from subtitle_sidecar.api import create_api_router
 from subtitle_sidecar.config import (
     AppSettings,
+    PathsSettings,
     load_settings,
     merge_assrt_provider_settings,
     merge_subdl_provider_settings,
@@ -37,6 +39,7 @@ from subtitle_sidecar.queue import TaskQueue
 WEB_V2_DIR = Path(__file__).parent / "web_v2"
 PROVIDER_ORDER_SETTING_KEY = "provider_order"
 SERVER_SETTING_KEY = "server"
+PATHS_SETTING_KEY = "paths"
 
 
 def _web_asset_version(web_dir: Path) -> str:
@@ -213,7 +216,29 @@ def create_app(
             stored_server = repo.get_setting(SERVER_SETTING_KEY) or {}
             if "token" in stored_server:
                 app.state.settings.server.token = str(stored_server.get("token") or "")
+            stored_paths = repo.get_setting(PATHS_SETTING_KEY)
+            if isinstance(stored_paths, dict) and "mappings" in stored_paths:
+                try:
+                    app.state.settings.paths = PathsSettings.model_validate(stored_paths)
+                except Exception:
+                    # Keep YAML/environment settings if a legacy database value is invalid.
+                    pass
             existing = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            last_callback_path = str(existing.get("moviepilot_last_received_path") or "")
+            if last_callback_path:
+                resolved = MediaResolver(app.state.settings.paths).resolve(last_callback_path)
+                if resolved.resolved_path is None:
+                    previous_issue = existing.get("moviepilot_path_issue")
+                    existing["moviepilot_path_issue"] = {
+                        "received_path": last_callback_path,
+                        "detected_at": (
+                            str(previous_issue.get("detected_at"))
+                            if isinstance(previous_issue, dict) and previous_issue.get("detected_at")
+                            else datetime.now(UTC).isoformat()
+                        ),
+                    }
+                else:
+                    existing.pop("moviepilot_path_issue", None)
             repo.set_setting(
                 RUNTIME_METADATA_SETTING_KEY,
                 {

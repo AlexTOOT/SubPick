@@ -33,6 +33,7 @@ const state = {
   jellyfinSettings: null,
   githubSettings: null,
   serverSettings: null,
+  pathSettings: null,
   providerOrder: [],
   providerAdapters: [],
   providerSettings: {},
@@ -242,10 +243,13 @@ function closeSetupDialog() {
 }
 
 function goToSetupTarget(view, section = "") {
-  switchView(view || "settings");
-  if (!section) return;
+  const targetView = view === "diagnostics" ? "settings" : (view || "settings");
+  const targetSection = view === "diagnostics" && !section ? "health" : section;
+  switchView(targetView);
+  if (!targetSection) return;
   window.setTimeout(() => {
-    const target = $(`[data-settings-section="${CSS.escape(section)}"]`);
+    const target = $(`[data-settings-section="${CSS.escape(targetSection)}"]`);
+    if (target instanceof HTMLDetailsElement) target.open = true;
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
     target?.classList.add("attention");
     window.setTimeout(() => target?.classList.remove("attention"), 1600);
@@ -973,6 +977,11 @@ function renderDiagnostics() {
     diag.moviepilot.token_configured && !diag.moviepilot.connected,
   ].filter(Boolean).length;
   const issueCount = localIssues + connectionIssues;
+  const healthStatus = $("#health-settings-status");
+  if (healthStatus) {
+    healthStatus.className = `badge ${issueCount ? "active" : "ok"}`;
+    healthStatus.textContent = issueCount ? `${issueCount} 项待确认` : "运行正常";
+  }
   $("#diagnostic-grid").innerHTML = `
     <div class="health-dashboard-head">
       <div class="health-orbit ${issueCount ? "warning" : "ok"}" aria-hidden="true"><i></i></div>
@@ -1185,6 +1194,7 @@ async function loadSettings() {
       { payload: jellyfin },
       { payload: github },
       { payload: server },
+      { payload: paths },
       { payload: providerOrder },
       { payload: subliminal },
       { payload: assrt },
@@ -1194,6 +1204,7 @@ async function loadSettings() {
       api("/api/v1/jellyfin/settings"),
       api("/api/v1/github/settings"),
       api("/api/v1/server/settings"),
+      api("/api/v1/paths/settings"),
       api("/api/v1/providers/order"),
       api("/api/v1/providers/subliminal/settings"),
       api("/api/v1/providers/assrt/settings"),
@@ -1203,6 +1214,7 @@ async function loadSettings() {
     state.jellyfinSettings = jellyfin;
     state.githubSettings = github;
     state.serverSettings = server;
+    state.pathSettings = paths;
     state.providerOrder = [...(providerOrder.order || [])];
     state.providerAdapters = [...(providerOrder.adapters || [])];
     state.providerSettings = { subliminal, assrt, subdl, zimuku };
@@ -1216,8 +1228,90 @@ async function loadSettings() {
       ? "GitHub Token 已配置，仅用于查询组件更新。"
       : "未配置时使用 GitHub 匿名 API 配额。";
     $("#server-token").value = server.token || "";
+    renderPathSettings();
     renderProviderOrder();
   } catch (error) { showToast(error.message, true); }
+}
+
+function pathMappingRow(mapping = {}) {
+  return `
+    <div class="path-mapping-row">
+      <input data-path-from type="text" value="${escapeHtml(mapping.from_path || "")}" placeholder="/downloads/media">
+      <span aria-hidden="true">→</span>
+      <input data-path-to type="text" value="${escapeHtml(mapping.to_path || "")}" placeholder="/media">
+      <button data-path-remove class="icon-button" type="button" title="删除这条映射" aria-label="删除这条映射">×</button>
+    </div>
+  `;
+}
+
+function currentPathMappings() {
+  return $$(".path-mapping-row", $("#path-mapping-rows")).map((row) => ({
+    from_path: $("[data-path-from]", row).value.trim(),
+    to_path: $("[data-path-to]", row).value.trim(),
+  })).filter((item) => item.from_path || item.to_path);
+}
+
+function renderPathSettings() {
+  const settings = state.pathSettings || {};
+  const mappings = settings.mappings || [];
+  const latestPath = settings.latest_moviepilot_path || settings.latest_callback_path || "";
+  const needsAttention = Boolean(settings.needs_attention || settings.path_issue);
+  $("#path-mapping-rows").innerHTML = (mappings.length ? mappings : [{}])
+    .map((mapping) => pathMappingRow(mapping))
+    .join("");
+  $("#path-latest-sample").textContent = latestPath || "尚未收到 MoviePilot 回调";
+  const badgeNode = $("#path-mapping-badge");
+  badgeNode.className = `badge ${needsAttention ? "error" : mappings.length ? "ok" : "ignored"}`;
+  badgeNode.textContent = needsAttention ? "路径不可访问" : mappings.length ? `${mappings.length} 条规则` : "无需设置";
+  const details = $("#path-mapping-settings");
+  if (needsAttention) details.open = true;
+  $("#path-mapping-result").textContent = needsAttention
+    ? "最近一次 MoviePilot 路径在拾幕容器内不可访问，请添加映射并测试。"
+    : "";
+}
+
+function addPathMapping(mapping = {}) {
+  $("#path-mapping-rows").insertAdjacentHTML("beforeend", pathMappingRow(mapping));
+}
+
+async function testPathMappings() {
+  const output = $("#path-mapping-result");
+  output.className = "path-mapping-result";
+  output.textContent = "正在检查映射后的文件是否存在…";
+  try {
+    const { payload } = await api("/api/v1/paths/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mappings: currentPathMappings() }),
+    });
+    output.className = `path-mapping-result ${payload.exists ? "ok" : "error"}`;
+    output.innerHTML = payload.exists
+      ? `测试通过：<code>${escapeHtml(payload.original_path)}</code> → <code>${escapeHtml(payload.resolved_path)}</code>`
+      : `测试失败：转换为 <code>${escapeHtml(payload.resolved_path || payload.original_path || "未知")}</code> 后仍未找到文件。`;
+  } catch (error) {
+    output.className = "path-mapping-result error";
+    output.textContent = error.message;
+  }
+}
+
+async function savePathMappings() {
+  const output = $("#path-mapping-result");
+  try {
+    const { payload } = await api("/api/v1/paths/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mappings: currentPathMappings() }),
+    });
+    state.pathSettings = payload;
+    renderPathSettings();
+    await loadDiagnostics();
+    output.className = "path-mapping-result ok";
+    output.textContent = "目录映射已保存，后续 MoviePilot 回调与 Jellyfin 路径都会使用这些规则。";
+    showToast("目录映射已保存");
+  } catch (error) {
+    output.className = "path-mapping-result error";
+    output.textContent = error.message;
+  }
 }
 
 function moveProvider(name, direction) {
@@ -1698,8 +1792,6 @@ async function refreshCurrent() {
     } else if (state.view === "logs") {
       await Promise.all([loadLogs(), loadLogProviders()]);
       connectLogs();
-    } else if (state.view === "diagnostics") {
-      await loadDiagnostics();
     } else if (state.view === "settings") {
       await Promise.all([loadDiagnostics(), loadSettings()]);
     }
@@ -1713,7 +1805,6 @@ const viewCopy = {
   tasks: ["任务工作台", "搜索、重试并排查每一个字幕任务"],
   library: ["媒体库", "从 Jellyfin 浏览字幕覆盖状态"],
   logs: ["实时日志", "只在需要时保持实时连接"],
-  diagnostics: ["系统健康", "目录、连接、组件、工具与服务状态"],
   settings: ["设置", "连接媒体库并管理服务配置"],
 };
 
@@ -1886,6 +1977,15 @@ function bindEvents() {
   $("#settings-export").addEventListener("click", exportSettings);
   $("#settings-import").addEventListener("click", () => $("#settings-import-file").click());
   $("#settings-import-file").addEventListener("change", importSettingsFile);
+  $("#path-mapping-add").addEventListener("click", () => addPathMapping());
+  $("#path-mapping-test").addEventListener("click", testPathMappings);
+  $("#path-mapping-save").addEventListener("click", savePathMappings);
+  $("#path-mapping-rows").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-path-remove]");
+    if (!remove) return;
+    remove.closest(".path-mapping-row")?.remove();
+    if (!$("#path-mapping-rows").children.length) addPathMapping();
+  });
   $("#setup-skip").addEventListener("click", () => {
     window.localStorage.setItem("subpick-setup-dismissed-v1", "1");
     closeSetupDialog();

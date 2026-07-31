@@ -40,7 +40,6 @@
           <button class="nav-item" data-view="library" type="button"><b><svg viewBox="0 0 24 24"><path d="m16 6 4 14M12 6v14M8 8v12M4 4v16"/></svg></b>媒体库</button>
           <span class="nav-caption">状态</span>
           <button class="nav-item" data-view="logs" type="button"><b><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg></b>实时日志</button>
-          <button class="nav-item" data-view="diagnostics" type="button"><b><svg viewBox="0 0 24 24"><path d="M19 14v1a7 7 0 0 1-14 0v-1M12 19v3M8 22h8"/><circle cx="12" cy="8" r="5"/><path d="M12 6v2l1.5 1.5"/></svg></b>系统健康</button>
           <button class="nav-item" data-view="settings" type="button"><b><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></b>设置</button>
         </nav>
         <div class="sidebar-foot">
@@ -194,17 +193,28 @@
             </section>
           </section>
 
-          <section id="view-diagnostics" class="view" aria-labelledby="diag-title">
-            <div class="view-heading">
-              <div><h2 id="diag-title">系统健康</h2><p>快速了解运行环境与外部服务状态</p></div>
-              <div class="actions"><button id="diag-health-check" class="primary" type="button">运行健康检查</button><button id="diag-updates" type="button">检查组件更新</button><button id="diag-export" type="button">导出诊断</button></div>
-            </div>
-            <section id="diagnostic-grid" class="panel health-dashboard"><p class="empty">正在读取诊断信息</p></section>
-          </section>
-
           <section id="view-settings" class="view" aria-labelledby="settings-title">
             <div class="view-heading"><div><h2 id="settings-title">设置</h2><p>连接 Jellyfin，管理字幕来源的顺序与配置</p></div></div>
             <div class="settings-grid">
+              <details id="health-settings" class="panel settings-card settings-span-all health-settings" data-settings-section="health">
+                <summary>
+                  <span>
+                    <strong>系统健康</strong>
+                    <small>运行环境、外部连接、本地工具和组件版本</small>
+                  </span>
+                  <span id="health-settings-status" class="badge active">正在读取</span>
+                </summary>
+                <div class="health-settings-body">
+                  <div class="health-settings-actions">
+                    <button id="diag-health-check" class="primary" type="button">运行健康检查</button>
+                    <button id="diag-updates" type="button">检查组件更新</button>
+                    <button id="diag-export" type="button">导出诊断</button>
+                  </div>
+                  <section id="diagnostic-grid" class="health-dashboard"><p class="empty">正在读取诊断信息</p></section>
+                </div>
+              </details>
+
+              <div class="settings-column">
               <form id="jellyfin-form" class="panel settings-card" data-settings-section="jellyfin">
                 <div class="panel-heading"><div><h2>Jellyfin 配置</h2><p>用于媒体库、海报和入库信息</p></div></div>
                 <label>Jellyfin 地址<input id="jellyfin-url" type="url" placeholder="http://jellyfin:8096"></label>
@@ -217,6 +227,17 @@
                 </div>
               </form>
 
+              <section class="panel settings-card" data-settings-section="providers">
+                <div class="panel-heading">
+                  <div><h2>Provider</h2><p>拖拽调整搜索顺序，点击卡片展开认证与高级设置</p></div>
+                  <button id="provider-order-save" class="primary" type="button">保存顺序</button>
+                </div>
+                <ol id="settings-provider-order" class="provider-order-list"></ol>
+                <p id="settings-status" class="settings-note" role="status"></p>
+              </section>
+              </div>
+
+              <div class="settings-column">
               <form id="github-form" class="panel settings-card" data-settings-section="system">
                 <div class="panel-heading"><div><h2>系统与更新</h2><p>管理 MoviePilot 通信鉴权与组件更新凭据</p></div></div>
                 <label>MoviePilot API Token
@@ -228,6 +249,29 @@
                 <p class="settings-note">填写后 MoviePilot 插件请求必须携带相同 Token；留空则不鉴权。</p>
                 <label>GitHub API Token<input id="github-key" type="password" autocomplete="off" placeholder="可选，留空表示保留现有值"></label>
                 <p id="github-key-status" class="settings-note">仅用于查询 GitHub Release，不会上传媒体信息。</p>
+                <details id="path-mapping-settings" class="nested-settings" data-settings-section="paths">
+                  <summary>
+                    <span><strong>目录映射</strong><small>通常无需设置，仅在回调路径无法访问时使用</small></span>
+                    <span id="path-mapping-badge" class="badge ignored">无需设置</span>
+                  </summary>
+                  <div class="nested-settings-body">
+                    <p class="settings-note">把 MoviePilot 或 Jellyfin 提供的路径前缀转换为拾幕容器内的路径。若各容器都使用相同的 <code>/media</code>，请保持为空。</p>
+                    <div class="path-reference">
+                      <span>最近一次 MoviePilot 传入路径</span>
+                      <code id="path-latest-sample">尚未收到 MoviePilot 回调</code>
+                    </div>
+                    <div class="path-mapping-head" aria-hidden="true"><span>来源路径前缀</span><span>拾幕容器路径前缀</span><span></span></div>
+                    <div id="path-mapping-rows" class="path-mapping-rows"></div>
+                    <div class="nested-settings-actions">
+                      <button id="path-mapping-add" type="button">添加规则</button>
+                      <span>
+                        <button id="path-mapping-test" type="button">测试映射</button>
+                        <button id="path-mapping-save" class="primary" type="button">保存映射</button>
+                      </span>
+                    </div>
+                    <p id="path-mapping-result" class="path-mapping-result" role="status"></p>
+                  </div>
+                </details>
                 <div class="form-actions split-actions">
                   <span>
                     <button id="settings-export" type="button">导出配置</button>
@@ -237,15 +281,7 @@
                   <button class="primary" type="submit">保存系统配置</button>
                 </div>
               </form>
-
-              <section class="panel settings-card settings-span-all" data-settings-section="providers">
-                <div class="panel-heading">
-                  <div><h2>Provider</h2><p>拖拽调整搜索顺序，点击卡片展开认证与高级设置</p></div>
-                  <button id="provider-order-save" class="primary" type="button">保存顺序</button>
-                </div>
-                <ol id="settings-provider-order" class="provider-order-list"></ol>
-                <p id="settings-status" class="settings-note" role="status"></p>
-              </section>
+              </div>
             </div>
           </section>
         </main>

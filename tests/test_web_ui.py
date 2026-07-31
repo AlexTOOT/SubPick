@@ -63,6 +63,8 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "/api/v1/logs/providers" in js
     assert "/api/v1/github/settings" in js
     assert "/api/v1/server/settings" in js
+    assert "/api/v1/paths/settings" in js
+    assert "/api/v1/paths/check" in js
     assert "/api/v1/providers/order" in js
     assert "/api/v1/providers/subliminal/settings" in js
     assert "/api/v1/providers/subdl/settings" in js
@@ -79,6 +81,8 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert 'id="setup-dialog"' in html
     assert 'id="jellyfin-check"' in html
     assert 'id="diag-health-check"' in html
+    assert 'id="path-mapping-settings"' in html
+    assert 'data-view="diagnostics"' not in html
     assert 'id="health-dialog"' in html
     assert 'id="health-progress-bar"' in html
     assert 'id="jellyfin-user"' not in html
@@ -93,7 +97,7 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "autoCheckProviders" in js
     assert "drawerOpenSeasons" in js
     assert "getRandomValues" in js
-    assert "grid-template-rows: 16px 36px 16px" in css
+    assert "grid-template-rows: 18px 40px 18px" in css
     assert "scrollbar-gutter: stable" in css
     assert "width: 136px; height: 136px" in css
     assert "window.setTimeout(resolve, 1750)" in js

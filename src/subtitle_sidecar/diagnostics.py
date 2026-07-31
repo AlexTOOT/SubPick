@@ -163,8 +163,8 @@ def _setup_status(
         for item in providers.values()
     )
     steps = [
-        _setup_step("storage", "运行目录", storage_ready, "diagnostics"),
-        _setup_step("media", "媒体目录", media_dir["status"] == "ok", "diagnostics"),
+        _setup_step("storage", "运行目录", storage_ready, "settings", "health"),
+        _setup_step("media", "媒体目录", media_dir["status"] == "ok", "settings", "paths"),
         {
             "id": "moviepilot",
             "label": "MoviePilot",
@@ -210,7 +210,8 @@ def _setup_status(
                 "error",
                 "运行目录不可用",
                 "请检查拾幕主目录是否可写。",
-                "diagnostics",
+                "settings",
+                "health",
             )
         )
     if media_dir["status"] != "ok":
@@ -220,7 +221,8 @@ def _setup_status(
                 "error",
                 "媒体目录不可用",
                 "请确认 Compose 中已把 MoviePilot 的完整媒体目录挂载到 /media，并允许写入字幕。",
-                "diagnostics",
+                "settings",
+                "paths",
             )
         )
     path_issue = runtime_metadata.get("moviepilot_path_issue")
@@ -231,7 +233,8 @@ def _setup_status(
                 "error",
                 "MoviePilot 路径无法访问",
                 f"最近收到的路径无法在容器中找到：{path_issue['received_path']}",
-                "diagnostics",
+                "settings",
+                "paths",
             )
         )
     if moviepilot["token_configured"] and not moviepilot["connected"]:

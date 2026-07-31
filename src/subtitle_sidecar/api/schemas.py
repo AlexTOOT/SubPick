@@ -92,6 +92,40 @@ class ServerSettingsResponse(BaseModel):
     token: str
 
 
+class PathMappingRequest(BaseModel):
+    from_path: str = Field(alias="from")
+    to_path: str = Field(alias="to")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PathMappingResponse(BaseModel):
+    from_path: str
+    to_path: str
+
+
+class PathSettingsRequest(BaseModel):
+    mappings: list[PathMappingRequest] = Field(default_factory=list)
+
+
+class PathMappingTestRequest(PathSettingsRequest):
+    sample_path: str = ""
+
+
+class PathMappingTestResponse(BaseModel):
+    original_path: str
+    resolved_path: str | None
+    strategy: str
+    exists: bool
+
+
+class PathSettingsResponse(BaseModel):
+    mappings: list[PathMappingResponse]
+    latest_moviepilot_path: str | None = None
+    path_issue: dict[str, str] | None = None
+    needs_attention: bool
+
+
 class SubliminalProviderAuthenticationRequest(BaseModel):
     username: str = ""
     password: str | None = None

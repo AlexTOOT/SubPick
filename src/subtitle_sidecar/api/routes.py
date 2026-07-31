@@ -44,6 +44,11 @@ from subtitle_sidecar.api.schemas import (
     JellyfinConnectionCheckResponse,
     GitHubSettingsRequest,
     GitHubSettingsResponse,
+    PathMappingTestRequest,
+    PathMappingTestResponse,
+    PathMappingResponse,
+    PathSettingsRequest,
+    PathSettingsResponse,
     ServerSettingsRequest,
     ServerSettingsResponse,
     RetryTaskResponse,
@@ -77,6 +82,8 @@ from subtitle_sidecar.api.schemas import (
 )
 from subtitle_sidecar.config import (
     AppSettings,
+    PathMapping,
+    PathsSettings,
     merge_assrt_provider_settings,
     merge_subdl_provider_settings,
     merge_subliminal_provider_settings,
@@ -106,6 +113,7 @@ SUBDL_SETTING_KEY = "subdl"
 ZIMUKU_SETTING_KEY = "zimuku"
 GITHUB_SETTING_KEY = "github"
 SERVER_SETTING_KEY = "server"
+PATHS_SETTING_KEY = "paths"
 PROVIDER_ORDER_SETTING_KEY = "provider_order"
 BACKUP_SETTING_KEYS = (
     JELLYFIN_SETTING_KEY,
@@ -115,6 +123,7 @@ BACKUP_SETTING_KEYS = (
     ZIMUKU_SETTING_KEY,
     GITHUB_SETTING_KEY,
     SERVER_SETTING_KEY,
+    PATHS_SETTING_KEY,
     PROVIDER_ORDER_SETTING_KEY,
 )
 
@@ -286,6 +295,13 @@ def create_api_router() -> APIRouter:
             raise HTTPException(status_code=422, detail="配置备份缺少 settings")
         config_yaml = payload.get("config_yaml")
         restart_required = False
+        imported_paths: PathsSettings | None = None
+        paths = stored.get(PATHS_SETTING_KEY)
+        if isinstance(paths, dict):
+            try:
+                imported_paths = PathsSettings.model_validate(paths)
+            except Exception as error:
+                raise HTTPException(status_code=422, detail=f"paths 配置无效：{error}") from error
         if isinstance(config_yaml, str) and config_yaml.strip():
             try:
                 parsed = yaml.safe_load(config_yaml) or {}
@@ -313,6 +329,13 @@ def create_api_router() -> APIRouter:
         server = stored.get(SERVER_SETTING_KEY)
         if isinstance(server, dict) and "token" in server:
             request.app.state.settings.server.token = str(server.get("token") or "")
+        if imported_paths is not None:
+            request.app.state.settings.paths = imported_paths
+            with session_scope(request.app.state.engine) as session:
+                repo = Repository(session)
+                runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+                _refresh_moviepilot_path_issue(runtime_metadata, request.app.state.settings.paths)
+                repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
         return {"imported": True, "restart_required": restart_required}
 
     @router.post(
@@ -545,6 +568,55 @@ def create_api_router() -> APIRouter:
                 repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
         request.app.state.settings.server.token = token
         return ServerSettingsResponse(token=token)
+
+    @router.get("/paths/settings", response_model=PathSettingsResponse)
+    def get_path_settings(request: Request) -> PathSettingsResponse:
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            mappings = _load_paths_config(request, repo)
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+        return _path_settings_response(mappings, runtime_metadata)
+
+    @router.put("/paths/settings", response_model=PathSettingsResponse)
+    def save_path_settings(
+        request: Request,
+        payload: PathSettingsRequest,
+    ) -> PathSettingsResponse:
+        mappings = _paths_from_request(payload)
+        _validate_path_mappings(mappings)
+        request.app.state.settings.paths = mappings
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            repo.set_setting(PATHS_SETTING_KEY, mappings.model_dump(by_alias=True))
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            _refresh_moviepilot_path_issue(runtime_metadata, mappings)
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+        return _path_settings_response(mappings, runtime_metadata)
+
+    @router.post("/paths/check", response_model=PathMappingTestResponse)
+    def test_path_settings(
+        request: Request,
+        payload: PathMappingTestRequest,
+    ) -> PathMappingTestResponse:
+        mappings = _paths_from_request(payload)
+        _validate_path_mappings(mappings)
+        with session_scope(request.app.state.engine) as session:
+            runtime_metadata = Repository(session).get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+        sample_path = payload.sample_path.strip() or str(
+            runtime_metadata.get("moviepilot_last_received_path") or ""
+        )
+        if not sample_path:
+            raise HTTPException(
+                status_code=422,
+                detail="没有可测试的路径，请先接收一次 MoviePilot 回调或填写 sample_path",
+            )
+        result = MediaResolver(mappings).resolve(sample_path)
+        return PathMappingTestResponse(
+            original_path=result.original_path,
+            resolved_path=str(result.resolved_path) if result.resolved_path is not None else None,
+            strategy=result.strategy,
+            exists=result.resolved_path is not None,
+        )
 
     @router.get(
         "/providers/subliminal/settings",
@@ -1431,6 +1503,80 @@ def _is_task_owned_subtitle(subtitle_path: Path, video_path: Path) -> bool:
         subtitle_path.suffix.casefold() in SUBTITLE_EXTENSIONS
         and subtitle_path.parent == video_path.parent
         and subtitle_path.name.startswith(f"{video_path.stem}.")
+    )
+
+
+def _paths_from_request(payload: PathSettingsRequest) -> PathsSettings:
+    return PathsSettings(
+        mappings=[
+            PathMapping(from_path=item.from_path.strip(), to_path=item.to_path.strip())
+            for item in payload.mappings
+        ]
+    )
+
+
+def _validate_path_mappings(settings: PathsSettings) -> None:
+    for mapping in settings.mappings:
+        if not mapping.from_path or not mapping.to_path:
+            raise HTTPException(
+                status_code=422,
+                detail="路径映射的来源路径和目标路径不能为空",
+            )
+
+
+def _load_paths_config(request: Request, repo: Repository) -> PathsSettings:
+    defaults = request.app.state.settings.paths
+    stored = repo.get_setting(PATHS_SETTING_KEY)
+    if not isinstance(stored, dict):
+        return defaults
+    try:
+        return PathsSettings.model_validate(stored)
+    except Exception:
+        return defaults
+
+
+def _refresh_moviepilot_path_issue(
+    runtime_metadata: dict,
+    settings: PathsSettings,
+) -> None:
+    received_path = str(runtime_metadata.get("moviepilot_last_received_path") or "")
+    if not received_path:
+        return
+    resolved = MediaResolver(settings).resolve(received_path)
+    if resolved.resolved_path is None:
+        issue = runtime_metadata.get("moviepilot_path_issue")
+        runtime_metadata["moviepilot_path_issue"] = {
+            "received_path": received_path,
+            "detected_at": (
+                str(issue.get("detected_at"))
+                if isinstance(issue, dict) and issue.get("detected_at")
+                else datetime.now(UTC).isoformat()
+            ),
+        }
+    else:
+        runtime_metadata.pop("moviepilot_path_issue", None)
+
+
+def _path_settings_response(
+    settings: PathsSettings,
+    runtime_metadata: dict,
+) -> PathSettingsResponse:
+    return PathSettingsResponse(
+        mappings=[
+            PathMappingResponse(from_path=mapping.from_path, to_path=mapping.to_path)
+            for mapping in settings.mappings
+        ],
+        latest_moviepilot_path=(
+            str(runtime_metadata.get("moviepilot_last_received_path"))
+            if runtime_metadata.get("moviepilot_last_received_path")
+            else None
+        ),
+        path_issue=(
+            runtime_metadata.get("moviepilot_path_issue")
+            if isinstance(runtime_metadata.get("moviepilot_path_issue"), dict)
+            else None
+        ),
+        needs_attention=bool(runtime_metadata.get("moviepilot_path_issue")),
     )
 
 
