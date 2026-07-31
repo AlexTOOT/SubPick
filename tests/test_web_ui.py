@@ -110,6 +110,9 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert html.count('<h2 id="library-title">媒体库</h2>') == 0
     assert html.count('<h2 id="logs-title">实时日志</h2>') == 0
     assert html.count('<h2 id="settings-title">设置</h2>') == 0
+    assert html.count('<h2 id="tasks-title">任务工作台</h2>') == 0
+    assert '<div class="section-commandbar">' in html
+    assert html.count('class="actions toolbar-actions"') == 2
     assert "浏览 Jellyfin 媒体库字幕状态，并按需创建任务" in js
     assert "details::details-content" in css
     assert "interpolate-size: allow-keywords" in css

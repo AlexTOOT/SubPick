@@ -357,7 +357,6 @@ main { position: relative; padding: 26px 30px 48px; }
 @keyframes view-in { from { opacity: 0; transform: translateY(3px); } }
 .view-heading, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .view-heading { margin-bottom: 18px; }
-.view-heading.actions-only { justify-content: flex-end; }
 .view-heading p, .panel-heading p { margin-top: 5px; color: var(--muted); font-size: 13px; }
 
 /* Animate native disclosure panels without adding wrapper-only markup. */
@@ -458,6 +457,7 @@ tbody tr:hover { background: #f7f9ff; }
 .toolbar { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .toolbar > input { width: min(330px, 100%); }
 .toolbar > label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.toolbar-actions { margin-left: auto; }
 .sort-controls { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .sort-controls label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .sort-controls select { min-width: 106px; }
@@ -470,7 +470,8 @@ tbody tr:hover { background: #f7f9ff; }
 .pagination { display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .pagination div { display: flex; gap: 7px; }
 
-.library-tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; }
+.section-commandbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.library-tabs { display: flex; min-width: 0; gap: 6px; overflow-x: auto; }
 .library-tabs button { flex: 0 0 auto; }
 .library-tabs button.active { background: var(--green); border-color: var(--green); color: #fff; }
 .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 13px; padding: 16px; }

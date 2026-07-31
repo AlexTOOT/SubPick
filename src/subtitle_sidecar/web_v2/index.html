@@ -100,15 +100,7 @@
             </section>
           </section>
 
-          <section id="view-tasks" class="view" aria-labelledby="tasks-title">
-            <div class="view-heading">
-              <div><h2 id="tasks-title">任务工作台</h2><p>搜索、筛选、批量操作与候选排查</p></div>
-              <div class="actions">
-                <button id="task-batch-retry" type="button" disabled>批量重试</button>
-                <button id="task-batch-delete" class="danger" type="button" disabled>批量删除</button>
-                <button id="task-delete-all" class="danger ghost" type="button">删除全部任务</button>
-              </div>
-            </div>
+          <section id="view-tasks" class="view" aria-label="任务工作台">
             <section class="panel">
               <div class="toolbar">
                 <input id="task-search" type="search" placeholder="搜索路径、标题、任务 ID">
@@ -121,6 +113,11 @@
                 <label>每页
                   <select id="task-page-size"><option>20</option><option selected>50</option><option>100</option><option>200</option></select>
                 </label>
+                <div class="actions toolbar-actions">
+                  <button id="task-batch-retry" type="button" disabled>批量重试</button>
+                  <button id="task-batch-delete" class="danger" type="button" disabled>批量删除</button>
+                  <button id="task-delete-all" class="danger ghost" type="button">删除全部任务</button>
+                </div>
               </div>
               <div class="table-wrap task-table-wrap">
                 <table class="task-table">
@@ -136,7 +133,8 @@
           </section>
 
           <section id="view-library" class="view" aria-label="媒体库">
-            <div class="view-heading actions-only">
+            <div class="section-commandbar">
+              <div id="library-tabs" class="library-tabs"></div>
               <div class="actions">
                 <button id="library-scan" type="button" disabled>扫描当前库</button>
                 <button id="library-ignore" type="button" disabled>忽略选中</button>
@@ -144,7 +142,6 @@
                 <button id="library-add" class="primary" type="button" disabled>添加选中任务</button>
               </div>
             </div>
-            <div id="library-tabs" class="library-tabs"></div>
             <section class="panel">
               <div class="toolbar">
                 <input id="media-search" type="search" placeholder="搜索标题或年份">
@@ -176,14 +173,12 @@
           </section>
 
           <section id="view-logs" class="view" aria-label="实时日志">
-            <div class="view-heading actions-only">
-              <div class="actions"><button id="logs-pause" type="button">暂停</button><button id="logs-clear" type="button">清空显示</button></div>
-            </div>
             <section class="panel logs-panel">
               <div class="toolbar">
                 <label>级别<select id="log-level"><option value="">全部级别</option><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
                 <label>任务<input id="log-task" inputmode="numeric" placeholder="任务 ID"></label>
                 <label>Provider<select id="log-provider"><option value="">全部 Provider</option></select></label>
+                <div class="actions toolbar-actions"><button id="logs-pause" type="button">暂停</button><button id="logs-clear" type="button">清空显示</button></div>
               </div>
               <div class="table-wrap">
                 <table class="log-table"><thead><tr><th>时间</th><th>级别</th><th>阶段</th><th>任务</th><th>Provider</th><th>消息</th></tr></thead><tbody id="log-rows"></tbody></table>
