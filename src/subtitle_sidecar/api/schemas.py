@@ -239,6 +239,17 @@ class LogProvidersResponse(BaseModel):
     providers: list[str]
 
 
+class HealthCheckItemRequest(BaseModel):
+    name: str
+    group: str
+    status: str
+    detail: str = ""
+
+
+class HealthCheckRunRequest(BaseModel):
+    checks: list[HealthCheckItemRequest]
+
+
 class ProviderCapabilitiesResponse(BaseModel):
     media_scopes: list[str]
     lookup_keys: list[str]
@@ -513,6 +524,7 @@ class StructuredLogEntryResponse(BaseModel):
     ts: str
     level: str
     event: str
+    category: str | None = None
     job_id: int | None = None
     task_id: int | None = None
     stage: str | None = None

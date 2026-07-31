@@ -87,22 +87,6 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function logProviderParts(value) {
-  const provider = String(value || "").trim();
-  const labels = {
-    "subliminal:opensubtitles": ["Subliminal", "OpenSub"],
-    "subliminal:opensubtitlescom": ["Subliminal", "OpenSub (Com)"],
-  };
-  return labels[provider.toLowerCase()] || [provider || "—"];
-}
-
-function renderLogProvider(value) {
-  const parts = logProviderParts(value);
-  return `<span class="log-provider-name">${parts
-    .map((part) => `<span>${escapeHtml(part)}</span>`)
-    .join("")}</span>`;
-}
-
 function filename(path) {
   return String(path || "").replaceAll("\\", "/").split("/").pop() || "未命名媒体";
 }
@@ -171,6 +155,17 @@ function renderHeaderStatus() {
     <div class="status-item"><span>${escapeHtml(name)}</span><strong>${badge(ok ? "completed" : "failed", value)}</strong></div>
   `).join("");
   renderSetupStatus();
+}
+
+function systemLogCategoryLabel(value) {
+  return ({
+    system: "系统",
+    health: "健康检查",
+    configuration: "配置",
+    provider: "Provider",
+    queue: "队列",
+    task: "任务",
+  })[String(value || "").toLowerCase()] || value || "—";
 }
 
 function providerDiagnosticStatus(value) {
@@ -884,10 +879,10 @@ async function loadLogs() {
   const params = new URLSearchParams({ after_id: "0", limit: "500" });
   const level = $("#log-level").value;
   const taskId = $("#log-task").value.trim();
-  const provider = $("#log-provider").value;
+  const category = $("#log-category").value;
   if (level) params.set("level", level);
   if (taskId) params.set("task_id", taskId);
-  if (provider) params.set("provider", provider);
+  if (category) params.set("category", category);
   try {
     const { payload } = await api(`/api/v1/logs?${params}`);
     state.logs = payload.entries || [];
@@ -902,22 +897,11 @@ function renderLogs() {
     <tr>
       <td>${escapeHtml(formatTime(entry.ts))}</td>
       <td class="level-${String(entry.level || "").toLowerCase()}">${escapeHtml(entry.level || "INFO")}</td>
-      <td>${escapeHtml(entry.stage || entry.event || "—")}</td>
+      <td>${escapeHtml(systemLogCategoryLabel(entry.category))}</td>
       <td>${escapeHtml(entry.task_id || "—")}</td>
-      <td>${renderLogProvider(entry.provider)}</td>
       <td>${escapeHtml(entry.message || entry.error_code || "—")}</td>
     </tr>
-  `).join("") || '<tr><td colspan="6" class="empty">暂无日志</td></tr>';
-}
-
-async function loadLogProviders() {
-  try {
-    const { payload } = await api("/api/v1/logs/providers");
-    $("#log-provider").innerHTML = '<option value="">全部 Provider</option>' + (payload.providers || [])
-      .map((name) => `<option value="${escapeHtml(name)}">${logProviderParts(name).map(escapeHtml).join(" / ")}</option>`).join("");
-  } catch (_error) {
-    // Logs remain available when the optional provider index cannot be loaded.
-  }
+  `).join("") || '<tr><td colspan="5" class="empty">暂无系统日志</td></tr>';
 }
 
 function connectLogs() {
@@ -925,7 +909,7 @@ function connectLogs() {
   if (state.logsPaused || state.view !== "logs") return;
   const source = new EventSource(`/api/v1/events?after_log_id=${state.logAfterId}`);
   state.logSource = source;
-  source.addEventListener("log_entry", (event) => {
+  source.addEventListener("system_event", (event) => {
     const entry = JSON.parse(event.data);
     state.logAfterId = Math.max(state.logAfterId, Number(entry.id) || 0);
     if (logMatches(entry)) {
@@ -944,10 +928,10 @@ function disconnectLogs() {
 function logMatches(entry) {
   const level = $("#log-level").value;
   const task = $("#log-task").value.trim();
-  const provider = $("#log-provider").value;
+  const category = $("#log-category").value;
   return (!level || entry.level === level)
     && (!task || String(entry.task_id) === task)
-    && (!provider || entry.provider === provider);
+    && (!category || entry.category === category);
 }
 
 function renderDiagnostics() {
@@ -1566,6 +1550,18 @@ async function runHealthCheck() {
     await new Promise((resolve) => window.setTimeout(resolve, 80));
   }
   state.healthRunning = false;
+  await api("/api/v1/diagnostics/health-runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      checks: state.healthChecks.map(({ label, group, status, detail }) => ({
+        name: label,
+        group,
+        status,
+        detail,
+      })),
+    }),
+  }).catch(() => {});
   await loadDiagnostics().catch(() => {});
   renderHealthDialog();
   showToast("健康检查完成");
@@ -1796,7 +1792,7 @@ async function refreshCurrent() {
         $("#media-grid").innerHTML = '<p class="empty">Jellyfin 尚未配置，请先在设置中完成连接</p>';
       }
     } else if (state.view === "logs") {
-      await Promise.all([loadLogs(), loadLogProviders()]);
+      await loadLogs();
       connectLogs();
     } else if (state.view === "settings") {
       await Promise.all([loadDiagnostics(), loadSettings()]);
@@ -1810,7 +1806,7 @@ const viewCopy = {
   overview: ["运行概览", "让每一部影片，都有合适的字幕"],
   tasks: ["任务工作台", "搜索、重试并排查每一个字幕任务"],
   library: ["媒体库", "浏览 Jellyfin 媒体库字幕状态，并按需创建任务"],
-  logs: ["实时日志", "只在需要时保持实时连接"],
+  logs: ["系统日志", "记录服务运行、健康检查、配置变更与任务结果"],
   settings: ["设置", "连接媒体库并管理服务配置"],
 };
 
@@ -1958,7 +1954,7 @@ function bindEvents() {
   $("#library-add").addEventListener("click", addMediaTasks);
   $("#library-ignore").addEventListener("click", () => batchIgnoreMedia(true));
   $("#library-unignore").addEventListener("click", () => batchIgnoreMedia(false));
-  ["#log-level", "#log-provider"].forEach((selector) => $(selector).addEventListener("change", async () => { await loadLogs(); connectLogs(); }));
+  ["#log-level", "#log-category"].forEach((selector) => $(selector).addEventListener("change", async () => { await loadLogs(); connectLogs(); }));
   let logTaskTimer;
   $("#log-task").addEventListener("input", () => {
     window.clearTimeout(logTaskTimer);

@@ -44,6 +44,7 @@ from subtitle_sidecar.api.schemas import (
     JellyfinConnectionCheckResponse,
     GitHubSettingsRequest,
     GitHubSettingsResponse,
+    HealthCheckRunRequest,
     PathMappingTestRequest,
     PathMappingTestResponse,
     PathMappingResponse,
@@ -89,7 +90,14 @@ from subtitle_sidecar.config import (
     merge_subliminal_provider_settings,
     merge_zimuku_provider_settings,
 )
-from subtitle_sidecar.db.models import Job, SubtitleArtifact, SubtitleCandidateRecord, TaskEvent, VideoTask
+from subtitle_sidecar.db.models import (
+    Job,
+    SubtitleArtifact,
+    SubtitleCandidateRecord,
+    SystemEvent,
+    TaskEvent,
+    VideoTask,
+)
 from subtitle_sidecar.db.repository import JellyfinMediaItemData, JobCreate, Repository
 from subtitle_sidecar.db.session import session_scope
 from subtitle_sidecar.jellyfin.client import JellyfinClient
@@ -98,7 +106,7 @@ from subtitle_sidecar.media.subtitles import SUBTITLE_EXTENSIONS
 from subtitle_sidecar.media.resolver import MediaResolver
 from subtitle_sidecar.pipeline.status import TASK_COMPLETED
 from subtitle_sidecar.diagnostics import build_diagnostics
-from subtitle_sidecar.observability import emit_structured_log, list_structured_logs
+from subtitle_sidecar.observability import emit_structured_log
 from subtitle_sidecar.providers.assrt_adapter import AssrtProvider
 from subtitle_sidecar.providers.adapters import discover_adapter_factories
 from subtitle_sidecar.providers.subdl_adapter import SubdlProvider
@@ -160,17 +168,17 @@ def create_api_router() -> APIRouter:
         limit: int = Query(default=200, ge=1, le=500),
         level: str | None = None,
         task_id: int | None = Query(default=None, ge=1),
-        provider: str | None = None,
+        category: str | None = None,
     ) -> StructuredLogsResponse:
         with session_scope(request.app.state.engine) as session:
-            rows = Repository(session).list_task_event_logs(
+            events = Repository(session).list_system_events(
                 after_id=after_id,
                 limit=limit,
                 level=level,
                 task_id=task_id,
-                provider=provider,
+                category=category,
             )
-        entries = [_to_task_event_log(event, job_id) for event, job_id in rows]
+        entries = [_to_system_event_log(event) for event in events]
         next_after_id = entries[-1]["id"] if entries else after_id
         return StructuredLogsResponse(entries=entries, next_after_id=next_after_id)
 
@@ -210,8 +218,9 @@ def create_api_router() -> APIRouter:
             nonlocal last_event_id, last_log_id
             while not await request.is_disconnected():
                 with session_scope(request.app.state.engine) as session:
-                    events = Repository(session).list_task_events_after_id(last_event_id)
-                logs, last_log_id = list_structured_logs(after_id=last_log_id, limit=100)
+                    repo = Repository(session)
+                    events = repo.list_task_events_after_id(last_event_id)
+                    system_events = repo.list_system_events(after_id=last_log_id, limit=100)
                 if events:
                     for event in events:
                         last_event_id = event.id
@@ -221,12 +230,14 @@ def create_api_router() -> APIRouter:
                             "event: task_event\n"
                             f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
                         )
-                for entry in logs:
+                for system_event in system_events:
+                    last_log_id = system_event.id
+                    entry = _to_system_event_log(system_event)
                     yield (
-                        "event: log_entry\n"
+                        "event: system_event\n"
                         f"data: {json.dumps(entry, ensure_ascii=False, separators=(',', ':'))}\n\n"
                     )
-                if not events and not logs:
+                if not events and not system_events:
                     yield ": keepalive\n\n"
                 await asyncio.sleep(1)
 
@@ -246,6 +257,31 @@ def create_api_router() -> APIRouter:
                 getattr(request.app.state, "provider_scheduler", None),
             )
         )
+
+    @router.post("/diagnostics/health-runs", status_code=204)
+    def record_health_run(request: Request, payload: HealthCheckRunRequest) -> Response:
+        counts = {
+            status: sum(1 for item in payload.checks if item.status == status)
+            for status in ("ok", "warning", "error", "skipped")
+        }
+        if counts["error"]:
+            level, summary = "ERROR", "健康检查完成，存在错误"
+        elif counts["warning"]:
+            level, summary = "WARNING", "健康检查完成，存在警告"
+        else:
+            level, summary = "INFO", "健康检查完成"
+        with session_scope(request.app.state.engine) as session:
+            Repository(session).record_system_event(
+                category="health",
+                event="health_check_completed",
+                level=level,
+                message=(
+                    f"{summary}：正常 {counts['ok']}，警告 {counts['warning']}，"
+                    f"错误 {counts['error']}，未启用 {counts['skipped']}"
+                ),
+                details={"counts": counts, "checks": [item.model_dump() for item in payload.checks]},
+            )
+        return Response(status_code=204)
 
     @router.get("/diagnostics/export")
     def export_diagnostics(request: Request) -> Response:
@@ -326,6 +362,11 @@ def create_api_router() -> APIRouter:
                 value = stored.get(key)
                 if isinstance(value, dict):
                     repo.set_setting(key, value)
+            _record_config_event(
+                repo,
+                "配置导入",
+                details={"restart_required": restart_required},
+            )
         server = stored.get(SERVER_SETTING_KEY)
         if isinstance(server, dict) and "token" in server:
             request.app.state.settings.server.token = str(server.get("token") or "")
@@ -470,6 +511,11 @@ def create_api_router() -> APIRouter:
             runtime_metadata.pop("jellyfin_last_check_status", None)
             runtime_metadata.pop("jellyfin_last_checked_at", None)
             repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+            _record_config_event(
+                repo,
+                "Jellyfin 配置已保存",
+                details={"server_url": config["server_url"], "api_key_configured": bool(config["api_key"])},
+            )
         return _to_jellyfin_settings_response(config)
 
     @router.post(
@@ -539,6 +585,11 @@ def create_api_router() -> APIRouter:
             if payload.api_key is not None:
                 config["api_key"] = payload.api_key.strip()
             repo.set_setting(GITHUB_SETTING_KEY, config)
+            _record_config_event(
+                repo,
+                "GitHub 更新检查配置已保存",
+                details={"api_key_configured": bool(config["api_key"])},
+            )
         return GitHubSettingsResponse(api_key_configured=bool(config["api_key"]))
 
     @router.get(
@@ -566,6 +617,11 @@ def create_api_router() -> APIRouter:
                 runtime_metadata.pop("moviepilot_last_callback_at", None)
                 runtime_metadata.pop("moviepilot_last_received_path", None)
                 repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+            _record_config_event(
+                repo,
+                "MoviePilot 通信配置已保存",
+                details={"token_configured": bool(token)},
+            )
         request.app.state.settings.server.token = token
         return ServerSettingsResponse(token=token)
 
@@ -591,6 +647,11 @@ def create_api_router() -> APIRouter:
             runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
             _refresh_moviepilot_path_issue(runtime_metadata, mappings)
             repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+            _record_config_event(
+                repo,
+                "目录映射已保存",
+                details={"mapping_count": len(mappings.mappings)},
+            )
         return _path_settings_response(mappings, runtime_metadata)
 
     @router.post("/paths/check", response_model=PathMappingTestResponse)
@@ -656,6 +717,7 @@ def create_api_router() -> APIRouter:
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
             repo.set_setting(PROVIDER_ORDER_SETTING_KEY, {"order": order})
+            _record_config_event(repo, "Provider 搜索顺序已保存", details={"order": order})
             return _provider_order_response(request, repo, factories=factories)
 
     @router.put(
@@ -688,6 +750,11 @@ def create_api_router() -> APIRouter:
                 "authentication": authentication,
             }
             repo.set_setting(SUBLIMINAL_SETTING_KEY, saved)
+            _record_config_event(
+                repo,
+                "Subliminal 配置已保存",
+                details={"enabled": payload.enabled, "providers": saved["providers"]},
+            )
             config = _load_subliminal_config(request, repo)
         return _to_subliminal_settings_response(config)
 
@@ -732,6 +799,11 @@ def create_api_router() -> APIRouter:
             }
             repo.set_setting(ASSRT_SETTING_KEY, saved)
             _clear_runtime_health(repo, "assrt")
+            _record_config_event(
+                repo,
+                "ASSRT 配置已保存",
+                details={"enabled": payload.enabled, "token_configured": bool(saved["token"])},
+            )
             config = _load_assrt_config(request, repo)
         return _to_assrt_settings_response(config)
 
@@ -784,6 +856,11 @@ def create_api_router() -> APIRouter:
             }
             repo.set_setting(SUBDL_SETTING_KEY, saved)
             _clear_runtime_health(repo, "subdl")
+            _record_config_event(
+                repo,
+                "SubDL 配置已保存",
+                details={"enabled": payload.enabled, "api_key_configured": bool(saved["api_key"])},
+            )
             config = _load_subdl_config(request, repo)
         return _to_subdl_settings_response(config)
 
@@ -848,6 +925,15 @@ def create_api_router() -> APIRouter:
             runtime_metadata.pop("zimuku_last_check_status", None)
             runtime_metadata.pop("zimuku_last_checked_at", None)
             repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+            _record_config_event(
+                repo,
+                "Zimuku 配置已保存",
+                details={
+                    "enabled": payload.enabled,
+                    "ocr_configured": bool(saved["moviepilot_ocr_url"]),
+                    "anti_captcha_configured": bool(saved["anti_captcha_api_key"]),
+                },
+            )
             config = _load_zimuku_config(request, repo)
         return _to_zimuku_settings_response(config, request.app.state.settings.data_dir)
 
@@ -1908,6 +1994,27 @@ def _record_runtime_health(request: Request, name: str, status: str) -> None:
                 }
             )
         repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+        repo.record_system_event(
+            category="provider",
+            event="provider_health_checked",
+            level="ERROR" if status == "failed" else "INFO",
+            message=f"Provider {name} 检查：{'不可用' if status == 'failed' else '可用'}",
+            details={"provider": name, "status": status},
+        )
+
+
+def _record_config_event(
+    repo: Repository,
+    message: str,
+    *,
+    details: dict | None = None,
+) -> None:
+    repo.record_system_event(
+        category="configuration",
+        event="configuration_changed",
+        message=message,
+        details=details,
+    )
 
 
 def _clear_runtime_health(repo: Repository, name: str) -> None:
@@ -2204,24 +2311,15 @@ def _set_jellyfin_media_item_ignored(
         )
 
 
-def _to_task_event_log(event: TaskEvent, job_id: int | None) -> dict:
-    details = event.details_json if isinstance(event.details_json, dict) else {}
-    status = event.status or ""
-    level = "error" if event.error_code or status in {"failed", "error", "interrupted"} else "warning" if status in {"warning", "skipped"} else "info"
+def _to_system_event_log(event: SystemEvent) -> dict:
     return {
         "id": event.id,
         "ts": _as_utc(event.created_at).isoformat(),
-        "level": level,
-        "event": "task_event",
-        "job_id": job_id,
-        "task_id": event.video_task_id,
-        "stage": event.stage,
-        "status": status,
-        "provider": details.get("provider"),
-        "candidate_id": details.get("candidate_id"),
-        "duration_ms": details.get("duration_ms"),
-        "error_code": event.error_code,
-        "message": event.message or f"{event.stage} {status}",
+        "level": event.level.lower(),
+        "event": event.event,
+        "category": event.category,
+        "task_id": event.task_id,
+        "message": event.message,
     }
 
 

@@ -170,7 +170,13 @@ def _provider_interval_from_requests_per_minute(
     return fallback_seconds
 
 
-def _record_provider_health(engine, name: str, status: str) -> None:
+def _record_provider_health(
+    engine,
+    name: str,
+    status: str,
+    *,
+    detail: str | None = None,
+) -> None:
     with session_scope(engine) as session:
         repo = Repository(session)
         metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
@@ -181,6 +187,14 @@ def _record_provider_health(engine, name: str, status: str) -> None:
             }
         )
         repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+        repo.record_system_event(
+            category="provider",
+            event="provider_health_checked",
+            level="ERROR" if status == "failed" else "INFO",
+            message=f"Provider {name} 启动检查：{'不可用' if status == 'failed' else '可用'}"
+            + (f"（{detail}）" if detail else ""),
+            details={"provider": name, "status": status},
+        )
 
 
 async def _run_startup_provider_checks(app: FastAPI) -> None:
@@ -259,6 +273,7 @@ async def _run_startup_provider_checks(app: FastAPI) -> None:
             app.state.engine,
             name,
             "failed" if isinstance(result, Exception) else "ok",
+            detail=str(result) if isinstance(result, Exception) else None,
         )
 
 
@@ -351,6 +366,19 @@ def create_app(
                 retention_days=app.state.settings.logging.retention_days,
                 max_entries=app.state.settings.logging.max_task_events,
             )
+            repo.prune_system_events(
+                retention_days=app.state.settings.logging.retention_days,
+                max_entries=app.state.settings.logging.max_task_events,
+            )
+            repo.record_system_event(
+                category="system",
+                event="system_started",
+                message=f"拾幕 {__version__} 已启动",
+                details={
+                    "app_version": __version__,
+                    "database_schema_version": DATABASE_SCHEMA_VERSION,
+                },
+            )
         await app.state.task_queue.start(
             recover=app.state.settings.queue.recover_interrupted_tasks
         )
@@ -360,6 +388,12 @@ def create_app(
         try:
             yield
         finally:
+            with session_scope(app.state.engine) as session:
+                Repository(session).record_system_event(
+                    category="system",
+                    event="system_stopping",
+                    message="拾幕正在停止",
+                )
             provider_health_task = getattr(app.state, "provider_health_task", None)
             if provider_health_task is not None:
                 if not provider_health_task.done():

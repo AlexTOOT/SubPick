@@ -39,7 +39,7 @@
           <button class="nav-item" data-view="tasks" type="button"><b><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></b>任务工作台</button>
           <button class="nav-item" data-view="library" type="button"><b><svg viewBox="0 0 24 24"><path d="m16 6 4 14M12 6v14M8 8v12M4 4v16"/></svg></b>媒体库</button>
           <span class="nav-caption">状态</span>
-          <button class="nav-item" data-view="logs" type="button"><b><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg></b>实时日志</button>
+          <button class="nav-item" data-view="logs" type="button"><b><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg></b>系统日志</button>
           <button class="nav-item" data-view="settings" type="button"><b><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></b>设置</button>
         </nav>
         <div class="sidebar-foot">
@@ -172,16 +172,16 @@
             </section>
           </section>
 
-          <section id="view-logs" class="view" aria-label="实时日志">
+          <section id="view-logs" class="view" aria-label="系统日志">
             <section class="panel logs-panel">
               <div class="toolbar">
                 <label>级别<select id="log-level"><option value="">全部级别</option><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
+                <label>类别<select id="log-category"><option value="">全部类别</option><option value="system">系统</option><option value="health">健康检查</option><option value="configuration">配置</option><option value="provider">Provider</option><option value="queue">队列</option><option value="task">任务</option></select></label>
                 <label>任务<input id="log-task" inputmode="numeric" placeholder="任务 ID"></label>
-                <label>Provider<select id="log-provider"><option value="">全部 Provider</option></select></label>
                 <div class="actions toolbar-actions"><button id="logs-pause" type="button">暂停</button><button id="logs-clear" type="button">清空显示</button></div>
               </div>
               <div class="table-wrap">
-                <table class="log-table"><thead><tr><th>时间</th><th>级别</th><th>阶段</th><th>任务</th><th>Provider</th><th>消息</th></tr></thead><tbody id="log-rows"></tbody></table>
+                <table class="log-table system-log-table"><thead><tr><th>时间</th><th>级别</th><th>类别</th><th>任务</th><th>消息</th></tr></thead><tbody id="log-rows"></tbody></table>
               </div>
             </section>
           </section>

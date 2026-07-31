@@ -204,3 +204,19 @@ class TaskEvent(Base):
     )
 
     video_task: Mapped[VideoTask] = relationship(back_populates="events")
+
+
+class SystemEvent(Base):
+    __tablename__ = "system_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category: Mapped[str] = mapped_column(String(50))
+    level: Mapped[str] = mapped_column(String(20), default="INFO")
+    event: Mapped[str] = mapped_column(String(100))
+    message: Mapped[str] = mapped_column(Text)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )

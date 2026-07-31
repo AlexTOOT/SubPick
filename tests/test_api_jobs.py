@@ -164,22 +164,26 @@ def test_logs_endpoint_is_persistent_and_filters_by_cursor(token_app, token_clie
         task_id = job.video_tasks[0].id
         repo.record_task_event(
             video_task_id=task_id,
-            stage="searching",
+            stage="provider_search",
             status="completed",
-            message="provider finished",
-            details={"provider": "alpha"},
+            message="provider detail must stay in task history",
+            details={"provider": "assrt"},
         )
-        failed_event = repo.record_task_event(
-            video_task_id=task_id,
-            stage="candidate_download",
-            status="failed",
+        repo.record_system_event(
+            category="system",
+            event="system_started",
+            message="started",
+        )
+        failed_event = repo.record_system_event(
+            category="task",
+            event="task_failed",
+            level="ERROR",
             message="download failed",
-            error_code="download_failed",
-            details={"provider": "wanted"},
+            task_id=task_id,
         )
 
     response = token_client.get(
-        f"/api/v1/logs?after_id=0&limit=200&level=error&task_id={task_id}&provider=wanted"
+        f"/api/v1/logs?after_id=0&limit=200&level=error&task_id={task_id}&category=task"
     )
 
     assert response.status_code == 200
@@ -190,18 +194,15 @@ def test_logs_endpoint_is_persistent_and_filters_by_cursor(token_app, token_clie
                 "id": failed_event.id,
                 "ts": response.json()["entries"][0]["ts"],
                 "level": "error",
-                "event": "task_event",
-                "job_id": job.id,
+                "event": "task_failed",
+                "category": "task",
                 "task_id": task_id,
-                "stage": "candidate_download",
-                "provider": "wanted",
-                "status": "failed",
-                "error_code": "download_failed",
                 "message": "download failed",
             }
         ],
         "next_after_id": failed_event.id,
     }
+    assert "provider detail must stay in task history" not in response.text
 
     invalid_response = token_client.get("/api/v1/logs?limit=501")
     assert invalid_response.status_code == 422
@@ -210,19 +211,10 @@ def test_logs_endpoint_is_persistent_and_filters_by_cursor(token_app, token_clie
 def test_logs_initial_page_returns_latest_entries_in_chronological_order(token_app, token_client):
     with session_scope(token_app.state.engine) as session:
         repo = Repository(session)
-        job = repo.create_job(
-            JobCreate(
-                source="moviepilot-csf",
-                raw_payload={"physical_video_file_full_path": "/media/A.mkv"},
-                video_path_original="/media/A.mkv",
-            )
-        )
-        task_id = job.video_tasks[0].id
         events = [
-            repo.record_task_event(
-                video_task_id=task_id,
-                stage="searching",
-                status="started",
+            repo.record_system_event(
+                category="system",
+                event="test_event",
                 message=f"event {index}",
             )
             for index in range(3)
@@ -233,6 +225,32 @@ def test_logs_initial_page_returns_latest_entries_in_chronological_order(token_a
     assert response.status_code == 200
     assert [entry["id"] for entry in response.json()["entries"]] == [events[1].id, events[2].id]
     assert response.json()["next_after_id"] == events[2].id
+
+
+def test_health_check_run_is_persisted_as_a_system_log(token_client):
+    recorded = token_client.post(
+        "/api/v1/diagnostics/health-runs",
+        json={
+            "checks": [
+                {"name": "数据库", "group": "运行环境", "status": "ok", "detail": "ok"},
+                {
+                    "name": "ASSRT",
+                    "group": "外部连接",
+                    "status": "warning",
+                    "detail": "配额不足",
+                },
+            ]
+        },
+    )
+    response = token_client.get("/api/v1/logs?category=health&limit=1")
+
+    assert recorded.status_code == 204
+    assert response.status_code == 200
+    assert response.json()["entries"][0]["event"] == "health_check_completed"
+    assert response.json()["entries"][0]["level"] == "warning"
+    assert response.json()["entries"][0]["message"] == (
+        "健康检查完成，存在警告：正常 1，警告 1，错误 0，未启用 0"
+    )
 
 
 def test_diagnostics_is_local_only_redacted_and_degraded_when_checks_fail(

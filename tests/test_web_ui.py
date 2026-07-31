@@ -60,7 +60,7 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "/api/v1/jellyfin/tasks" in js
     assert "/api/v1/jellyfin/items/batch-ignore" in js
     assert "/api/v1/logs" in js
-    assert "/api/v1/logs/providers" in js
+    assert "/api/v1/diagnostics/health-runs" in js
     assert "/api/v1/github/settings" in js
     assert "/api/v1/server/settings" in js
     assert "/api/v1/paths/settings" in js
@@ -102,13 +102,12 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "scrollbar-gutter: stable" in css
     assert "width: 136px; height: 136px" in css
     assert "window.setTimeout(resolve, 1750)" in js
-    assert "OpenSub (Com)" in js
     assert "safeExternalUrl(candidate.source_url)" in js
-    assert ".log-provider-name" in css
     assert 'href="/legacy"' not in html
     assert "清空显示" in html
     assert html.count('<h2 id="library-title">媒体库</h2>') == 0
-    assert html.count('<h2 id="logs-title">实时日志</h2>') == 0
+    assert "系统日志" in html
+    assert 'id="log-category"' in html
     assert html.count('<h2 id="settings-title">设置</h2>') == 0
     assert html.count('<h2 id="tasks-title">任务工作台</h2>') == 0
     assert '<div class="section-commandbar">' in html

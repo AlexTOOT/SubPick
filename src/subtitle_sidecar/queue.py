@@ -128,6 +128,19 @@ class TaskQueue:
                     error_code="interrupted_by_restart",
                 )
             queued_task_ids = repo.list_video_task_ids_by_status([TASK_QUEUED])
+            repo.record_system_event(
+                category="queue",
+                event="queue_recovered",
+                level="WARNING" if interrupted_task_ids else "INFO",
+                message=(
+                    f"队列恢复完成：重新排队 {len(queued_task_ids)} 个任务，"
+                    f"中断 {len(interrupted_task_ids)} 个任务"
+                ),
+                details={
+                    "queued_count": len(queued_task_ids),
+                    "interrupted_count": len(interrupted_task_ids),
+                },
+            )
 
         for task_id in queued_task_ids:
             self.enqueue(task_id)

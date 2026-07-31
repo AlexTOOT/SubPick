@@ -4,7 +4,7 @@ from subtitle_sidecar.db.repository import Repository
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
 
 
-def test_create_tables_creates_task_events_table(tmp_path) -> None:
+def test_create_tables_creates_event_tables(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}", future=True)
 
     create_tables(engine)
@@ -12,6 +12,7 @@ def test_create_tables_creates_task_events_table(tmp_path) -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     assert "task_events" in table_names
+    assert "system_events" in table_names
 
     task_event_columns = {column["name"] for column in inspector.get_columns("task_events")}
     assert {
@@ -24,6 +25,18 @@ def test_create_tables_creates_task_events_table(tmp_path) -> None:
         "details_json",
         "created_at",
     }.issubset(task_event_columns)
+
+    system_event_columns = {column["name"] for column in inspector.get_columns("system_events")}
+    assert {
+        "id",
+        "category",
+        "level",
+        "event",
+        "message",
+        "task_id",
+        "details_json",
+        "created_at",
+    }.issubset(system_event_columns)
 
 
 def test_create_tables_is_idempotent_and_adds_missing_table_to_existing_sqlite_db(tmp_path) -> None:

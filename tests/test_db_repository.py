@@ -67,6 +67,54 @@ def test_update_video_task_status_persists_error_message(tmp_path) -> None:
     assert loaded.video_tasks[0].error_message == "video_not_found"
 
 
+def test_task_status_transitions_create_concise_system_events(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    create_tables(engine)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        job = repo.create_job(
+            JobCreate(
+                source="manual",
+                raw_payload={},
+                video_path_original="/media/Movie.mkv",
+            )
+        )
+        task_id = job.video_tasks[0].id
+        repo.update_video_task_status(task_id, "resolving")
+        repo.update_video_task_status(task_id, "searching")
+        repo.update_video_task_status(task_id, "failed", "no candidates")
+        events = repo.list_system_events(category="task", task_id=task_id)
+
+    assert [event.event for event in events] == ["task_started", "task_failed"]
+    assert events[0].message == f"任务 #{task_id} 开始：Movie.mkv"
+    assert events[1].message == f"任务 #{task_id} 失败：no candidates"
+    assert events[1].level == "ERROR"
+
+
+def test_system_events_are_persistent_filterable_and_prunable(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    create_tables(engine)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        first = repo.record_system_event(
+            category="system",
+            event="system_started",
+            message="started",
+        )
+        second = repo.record_system_event(
+            category="health",
+            event="health_check_completed",
+            level="WARNING",
+            message="warning",
+        )
+        assert [event.id for event in repo.list_system_events(after_id=first.id)] == [second.id]
+        assert [event.id for event in repo.list_system_events(level="warning")] == [second.id]
+        assert repo.prune_system_events(retention_days=30, max_entries=1) == 1
+        assert [event.id for event in repo.list_system_events()] == [second.id]
+
+
 def test_resolving_task_status_refreshes_parent_job_summary(tmp_path) -> None:
     engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
     create_tables(engine)

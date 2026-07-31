@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import String, delete, func, or_, select
@@ -14,12 +15,18 @@ from subtitle_sidecar.db.models import (
     Job,
     SubtitleArtifact,
     SubtitleCandidateRecord,
+    SystemEvent,
     TaskEvent,
     VideoTask,
 )
 from subtitle_sidecar.pipeline.status import (
     ACTIVE_TASK_STATUSES,
+    TASK_COMPLETED,
+    TASK_FAILED,
     TASK_INTERRUPTED,
+    TASK_SKIPPED_EMBEDDED_SUBTITLE,
+    TASK_SKIPPED_EXISTING_SUBTITLE,
+    TERMINAL_TASK_STATUSES,
     summarize_job_status,
 )
 
@@ -363,10 +370,17 @@ class Repository:
         task = self.session.get(VideoTask, task_id)
         if task is None:
             raise ValueError(f"video task {task_id} not found")
+        previous_status = task.status
         task.status = status
         task.error_message = error_message
         self._refresh_job_status(task.job_id)
         self.session.flush()
+        self._record_task_lifecycle_transition(
+            task,
+            previous_status=previous_status,
+            status=status,
+            error_message=error_message,
+        )
         return task
 
     def set_video_task_resolved_path(self, task_id: int, resolved_path: str) -> VideoTask:
@@ -637,6 +651,81 @@ class Repository:
             rows.reverse()
         return rows
 
+    def record_system_event(
+        self,
+        *,
+        category: str,
+        event: str,
+        message: str,
+        level: str = "INFO",
+        task_id: int | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> SystemEvent:
+        system_event = SystemEvent(
+            category=category,
+            level=level.upper(),
+            event=event,
+            message=message,
+            task_id=task_id,
+            details_json=_json_safe(details),
+        )
+        self.session.add(system_event)
+        self.session.flush()
+        self.session.refresh(system_event)
+        emit_structured_log(
+            event="system_event",
+            category=category,
+            system_event=event,
+            level=level.lower(),
+            task_id=task_id,
+            message=message,
+            details=system_event.details_json,
+        )
+        return system_event
+
+    def list_system_events(
+        self,
+        *,
+        after_id: int = 0,
+        limit: int = 200,
+        level: str | None = None,
+        category: str | None = None,
+        task_id: int | None = None,
+    ) -> list[SystemEvent]:
+        statement = select(SystemEvent).where(SystemEvent.id > after_id)
+        if level:
+            statement = statement.where(SystemEvent.level == level.upper())
+        if category:
+            statement = statement.where(SystemEvent.category == category)
+        if task_id is not None:
+            statement = statement.where(SystemEvent.task_id == task_id)
+        statement = statement.order_by(
+            SystemEvent.id.desc() if after_id == 0 else SystemEvent.id.asc()
+        ).limit(limit)
+        events = list(self.session.scalars(statement))
+        if after_id == 0:
+            events.reverse()
+        return events
+
+    def prune_system_events(self, *, retention_days: int, max_entries: int) -> int:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
+        deleted = self.session.execute(
+            delete(SystemEvent).where(SystemEvent.created_at < cutoff)
+        ).rowcount or 0
+        total = int(self.session.scalar(select(func.count()).select_from(SystemEvent)) or 0)
+        overflow = total - max_entries
+        if overflow > 0:
+            oldest_ids = (
+                select(SystemEvent.id)
+                .order_by(SystemEvent.id.asc())
+                .limit(overflow)
+                .subquery()
+            )
+            deleted += self.session.execute(
+                delete(SystemEvent).where(SystemEvent.id.in_(select(oldest_ids.c.id)))
+            ).rowcount or 0
+        return deleted
+
     def prune_task_events(self, *, retention_days: int, max_entries: int) -> int:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
         deleted = self.session.execute(
@@ -666,6 +755,55 @@ class Repository:
             )
         )
         job.status = summarize_job_status(statuses)
+
+    def _record_task_lifecycle_transition(
+        self,
+        task: VideoTask,
+        *,
+        previous_status: str,
+        status: str,
+        error_message: str | None,
+    ) -> None:
+        if previous_status == status:
+            return
+        display_name = task.title or Path(task.video_path_original).name
+        details = {
+            "previous_status": previous_status,
+            "status": status,
+            "media": display_name,
+        }
+        if previous_status not in ACTIVE_TASK_STATUSES and status in ACTIVE_TASK_STATUSES:
+            self.record_system_event(
+                category="task",
+                event="task_started",
+                message=f"任务 #{task.id} 开始：{display_name}",
+                task_id=task.id,
+                details=details,
+            )
+            return
+        if status not in TERMINAL_TASK_STATUSES:
+            return
+        if status == TASK_COMPLETED:
+            event, level, summary = "task_completed", "INFO", "完成"
+        elif status == TASK_FAILED:
+            event, level, summary = "task_failed", "ERROR", "失败"
+        elif status == TASK_INTERRUPTED:
+            event, level, summary = "task_interrupted", "WARNING", "中断"
+        elif status == TASK_SKIPPED_EXISTING_SUBTITLE:
+            event, level, summary = "task_skipped", "INFO", "跳过（已有外挂字幕）"
+        elif status == TASK_SKIPPED_EMBEDDED_SUBTITLE:
+            event, level, summary = "task_skipped", "INFO", "跳过（已有内嵌字幕）"
+        else:
+            return
+        suffix = f"：{error_message}" if error_message and level != "INFO" else ""
+        self.record_system_event(
+            category="task",
+            event=event,
+            message=f"任务 #{task.id} {summary}{suffix}",
+            level=level,
+            task_id=task.id,
+            details={**details, "error": error_message},
+        )
 
     def _resolve_jellyfin_media_item(
         self,
