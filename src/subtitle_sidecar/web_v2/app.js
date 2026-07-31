@@ -38,7 +38,6 @@ const state = {
   providerAdapters: [],
   providerSettings: {},
   providerChecks: {},
-  providerAutoCheckStarted: false,
   openProviders: new Set(),
   draggedProvider: null,
   dependencyUpdates: null,
@@ -172,6 +171,28 @@ function renderHeaderStatus() {
     <div class="status-item"><span>${escapeHtml(name)}</span><strong>${badge(ok ? "completed" : "failed", value)}</strong></div>
   `).join("");
   renderSetupStatus();
+}
+
+function providerDiagnosticStatus(value) {
+  if (!value?.enabled) return ["未启用", true];
+  const labels = {
+    ok: "可用",
+    failed: "检查失败",
+    error: "检查失败",
+    unverified: "未验证",
+    unconfigured: "未配置",
+  };
+  const label = labels[value.status] || String(value.status || "未验证");
+  if (!value.last_checked_at || !["ok", "failed", "error"].includes(value.status)) {
+    return [label, value.status === "ok"];
+  }
+  const checkedAt = new Date(value.last_checked_at);
+  const checkedLabel = Number.isNaN(checkedAt.getTime())
+    ? ""
+    : checkedAt.toLocaleString("zh-CN", {
+      month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  return [`${label}${checkedLabel ? ` · ${checkedLabel}` : ""}`, value.status === "ok"];
 }
 
 function renderSetupStatus() {
@@ -951,8 +972,7 @@ function renderDiagnostics() {
       ["Jellyfin", diag.jellyfin.connected ? "已连接" : diag.jellyfin.configured ? "等待测试" : "未配置", diag.jellyfin.connected],
       ...Object.entries(diag.providers || {}).map(([name, value]) => [
         name,
-        value.enabled ? value.status : "未启用",
-        !value.enabled || !["unavailable", "error", "unconfigured"].includes(value.status),
+        ...providerDiagnosticStatus(value),
       ]),
     ]],
     ["本地工具", (diag.tools || []).map((tool) => [
@@ -976,7 +996,10 @@ function renderDiagnostics() {
     diag.jellyfin.configured && !diag.jellyfin.connected,
     diag.moviepilot.token_configured && !diag.moviepilot.connected,
   ].filter(Boolean).length;
-  const issueCount = localIssues + connectionIssues;
+  const providerIssues = Object.values(diag.providers || {}).filter(
+    (item) => item.enabled && item.status !== "ok"
+  ).length;
+  const issueCount = localIssues + connectionIssues + providerIssues;
   const healthStatus = $("#health-settings-status");
   if (healthStatus) {
     healthStatus.className = `badge ${issueCount ? "active" : "ok"}`;
@@ -1048,10 +1071,10 @@ function providerStatus(name, adapter) {
   if (state.providerChecks[name]?.ok === true) return { enabled, label: "已启用 · 可用" };
   if (state.providerChecks[name]?.ok === false) return { enabled, label: "已启用 · 检查失败" };
   if (settings.status === "unconfigured") return { enabled, label: "已启用 · 未配置" };
-  if (diagnostic.status === "unavailable" || diagnostic.status === "error") {
-    return { enabled, label: "已启用 · 不可用" };
+  if (["unavailable", "error", "failed"].includes(diagnostic.status)) {
+    return { enabled, label: "已启用 · 检查失败" };
   }
-  return { enabled, label: diagnostic.status === "ok" ? "已启用 · 本地可用" : "已启用 · 待验证" };
+  return { enabled, label: diagnostic.status === "ok" ? "已启用 · 可用" : "已启用 · 待验证" };
 }
 
 function secretStatus(configured) {
@@ -1720,28 +1743,11 @@ async function checkProvider(action, name) {
   try {
     const { payload } = await api(endpoint, { method: "POST" });
     state.providerChecks[name] = { ok: true, message: format(payload) };
-    renderProviderOrder();
   } catch (error) {
     state.providerChecks[name] = { ok: false, message: `检查失败：${error.message}` };
-    renderProviderOrder();
   }
-}
-
-async function autoCheckProviders() {
-  if (state.providerAutoCheckStarted) return;
-  state.providerAutoCheckStarted = true;
-  const checks = [];
-  const assrt = state.providerSettings.assrt || {};
-  const subdl = state.providerSettings.subdl || {};
-  const zimuku = state.providerSettings.zimuku || {};
-  if (assrt.enabled && assrt.token_configured) checks.push(checkProvider("assrt-quota", "assrt"));
-  if (subdl.enabled && subdl.api_key_configured) checks.push(checkProvider("subdl-usage", "subdl"));
-  if (zimuku.enabled && zimuku.moviepilot_ocr_configured) {
-    checks.push(checkProvider("zimuku-ocr", "zimuku"));
-  } else if (zimuku.enabled && zimuku.anti_captcha_api_key_configured) {
-    checks.push(checkProvider("zimuku-balance", "zimuku"));
-  }
-  await Promise.allSettled(checks);
+  await loadDiagnostics().catch(() => {});
+  renderProviderOrder();
 }
 
 function openDrawer(eyebrow, title, html, { seriesId = null } = {}) {
@@ -2002,9 +2008,10 @@ function bindEvents() {
 async function init() {
   bindEvents();
   const minSplash = new Promise((resolve) => window.setTimeout(resolve, 1750));
-  const settingsReady = loadSettings().then(() => { void autoCheckProviders(); });
+  const settingsReady = loadSettings();
   await Promise.allSettled([refreshCurrent(), settingsReady, minSplash]);
   $("#splash").classList.add("done");
+  window.setTimeout(() => { void loadDiagnostics().catch(() => {}); }, 3000);
   maybeOpenSetupDialog();
 }
 

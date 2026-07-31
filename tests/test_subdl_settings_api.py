@@ -56,4 +56,6 @@ def test_subdl_settings_persist_without_returning_key_and_usage_is_available(tmp
         "download_limit": 50,
         "reset_at": "2026-07-14T00:00:00Z",
     }
+    assert diagnostics.json()["providers"]["subdl"]["status"] == "ok"
+    assert diagnostics.json()["providers"]["subdl"]["last_checked_at"]
     assert "subdl-test-secret" not in f"{loaded.json()}{diagnostics.json()}"

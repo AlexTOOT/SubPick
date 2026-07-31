@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import hashlib
@@ -30,9 +31,12 @@ from subtitle_sidecar.providers.adapters import (
     build_enabled_adapters,
     build_recommended_provider_intervals,
 )
+from subtitle_sidecar.providers.assrt_adapter import AssrtProvider
 from subtitle_sidecar.providers.registry import ProviderRegistry
 from subtitle_sidecar.providers.scheduler import ProviderSearchScheduler
 from subtitle_sidecar.providers.negative_cache import ProviderNegativeCache
+from subtitle_sidecar.providers.subdl_adapter import SubdlProvider
+from subtitle_sidecar.providers.zimuku_adapter import MoviePilotOcrSolver, ZimukuProvider
 from subtitle_sidecar.queue import TaskQueue
 
 
@@ -166,6 +170,98 @@ def _provider_interval_from_requests_per_minute(
     return fallback_seconds
 
 
+def _record_provider_health(engine, name: str, status: str) -> None:
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+        metadata.update(
+            {
+                f"{name}_last_check_status": status,
+                f"{name}_last_checked_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+
+
+async def _run_startup_provider_checks(app: FastAPI) -> None:
+    """Refresh external Provider health once per service start."""
+    with session_scope(app.state.engine) as session:
+        repo = Repository(session)
+        assrt = merge_assrt_provider_settings(
+            app.state.settings.providers.assrt,
+            repo.get_setting("assrt"),
+        )
+        subdl = merge_subdl_provider_settings(
+            app.state.settings.providers.subdl,
+            repo.get_setting("subdl"),
+        )
+        zimuku = merge_zimuku_provider_settings(
+            app.state.settings.providers.zimuku,
+            repo.get_setting("zimuku"),
+        )
+
+    checks: list[tuple[str, Callable[[], object]]] = []
+    if assrt.enabled and assrt.token:
+        def check_assrt() -> int:
+            factory = getattr(app.state, "assrt_provider_factory", None)
+            provider = factory(assrt) if factory else AssrtProvider(
+                token=assrt.token,
+                timeout_seconds=assrt.timeout_seconds,
+                requests_per_minute=assrt.requests_per_minute,
+            )
+            return provider.quota()
+
+        checks.append(("assrt", check_assrt))
+    if subdl.enabled and subdl.api_key:
+        def check_subdl() -> dict:
+            factory = getattr(app.state, "subdl_provider_factory", None)
+            provider = factory(subdl) if factory else SubdlProvider(
+                api_key=subdl.api_key,
+                timeout_seconds=subdl.timeout_seconds,
+                requests_per_minute=subdl.requests_per_minute,
+                use_api_key_for_downloads=subdl.use_api_key_for_downloads,
+            )
+            return provider.usage()
+
+        checks.append(("subdl", check_subdl))
+    if zimuku.enabled and zimuku.moviepilot_ocr_url:
+        def check_zimuku_ocr() -> int:
+            factory = getattr(app.state, "zimuku_ocr_solver_factory", None)
+            solver = factory(zimuku) if factory else MoviePilotOcrSolver(
+                base_url=zimuku.moviepilot_ocr_url,
+                timeout_seconds=zimuku.timeout_seconds,
+            )
+            duration_ms = solver.check_available()
+            if solver.last_check_answer != MoviePilotOcrSolver.CHECK_EXPECTED_ANSWER:
+                raise RuntimeError("ocr_answer_mismatch")
+            return duration_ms
+
+        checks.append(("zimuku", check_zimuku_ocr))
+    elif zimuku.enabled and zimuku.anti_captcha_api_key:
+        def check_zimuku_balance() -> float:
+            factory = getattr(app.state, "zimuku_provider_factory", None)
+            provider = factory(zimuku) if factory else ZimukuProvider(
+                anti_captcha_api_key=zimuku.anti_captcha_api_key,
+                base_url=zimuku.base_url,
+                timeout_seconds=zimuku.timeout_seconds,
+                request_delay_seconds=zimuku.request_delay_seconds,
+            )
+            return provider.captcha_balance()
+
+        checks.append(("zimuku", check_zimuku_balance))
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(check) for _name, check in checks),
+        return_exceptions=True,
+    )
+    for (name, _check), result in zip(checks, results, strict=True):
+        _record_provider_health(
+            app.state.engine,
+            name,
+            "failed" if isinstance(result, Exception) else "ok",
+        )
+
+
 def _build_bundle_cache_probe(settings: AppSettings, engine) -> Callable[[int], bool]:
     def has_cached_bundle(task_id: int) -> bool:
         with session_scope(engine) as session:
@@ -258,9 +354,20 @@ def create_app(
         await app.state.task_queue.start(
             recover=app.state.settings.queue.recover_interrupted_tasks
         )
+        app.state.provider_health_task = asyncio.create_task(
+            _run_startup_provider_checks(app)
+        )
         try:
             yield
         finally:
+            provider_health_task = getattr(app.state, "provider_health_task", None)
+            if provider_health_task is not None:
+                if not provider_health_task.done():
+                    provider_health_task.cancel()
+                try:
+                    await provider_health_task
+                except asyncio.CancelledError:
+                    pass
             await app.state.task_queue.stop()
 
     app = FastAPI(title="SubPick", lifespan=lifespan)

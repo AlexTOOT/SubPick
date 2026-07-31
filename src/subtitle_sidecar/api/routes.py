@@ -731,6 +731,7 @@ def create_api_router() -> APIRouter:
                 "requests_per_minute": payload.requests_per_minute,
             }
             repo.set_setting(ASSRT_SETTING_KEY, saved)
+            _clear_runtime_health(repo, "assrt")
             config = _load_assrt_config(request, repo)
         return _to_assrt_settings_response(config)
 
@@ -747,9 +748,12 @@ def create_api_router() -> APIRouter:
             requests_per_minute=config.requests_per_minute,
         )
         try:
-            return AssrtQuotaResponse(quota=provider.quota())
+            response = AssrtQuotaResponse(quota=provider.quota())
         except Exception as error:
+            _record_runtime_health(request, "assrt", "failed")
             raise HTTPException(status_code=502, detail="ASSRT quota check failed") from error
+        _record_runtime_health(request, "assrt", "ok")
+        return response
 
     @router.get(
         "/providers/subdl/settings",
@@ -779,6 +783,7 @@ def create_api_router() -> APIRouter:
                 "use_api_key_for_downloads": payload.use_api_key_for_downloads,
             }
             repo.set_setting(SUBDL_SETTING_KEY, saved)
+            _clear_runtime_health(repo, "subdl")
             config = _load_subdl_config(request, repo)
         return _to_subdl_settings_response(config)
 
@@ -796,9 +801,12 @@ def create_api_router() -> APIRouter:
             use_api_key_for_downloads=config.use_api_key_for_downloads,
         )
         try:
-            return SubdlUsageResponse(**_subdl_usage_response(provider.usage()))
+            response = SubdlUsageResponse(**_subdl_usage_response(provider.usage()))
         except Exception as error:
+            _record_runtime_health(request, "subdl", "failed")
             raise HTTPException(status_code=502, detail="SubDL usage check failed") from error
+        _record_runtime_health(request, "subdl", "ok")
+        return response
 
     @router.get(
         "/providers/zimuku/settings",
@@ -837,6 +845,8 @@ def create_api_router() -> APIRouter:
             runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
             runtime_metadata.pop("zimuku_ocr_last_check_status", None)
             runtime_metadata.pop("zimuku_ocr_last_checked_at", None)
+            runtime_metadata.pop("zimuku_last_check_status", None)
+            runtime_metadata.pop("zimuku_last_checked_at", None)
             repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
             config = _load_zimuku_config(request, repo)
         return _to_zimuku_settings_response(config, request.app.state.settings.data_dir)
@@ -952,9 +962,12 @@ def create_api_router() -> APIRouter:
             request_delay_seconds=config.request_delay_seconds,
         )
         try:
-            return ZimukuCaptchaBalanceResponse(balance=provider.captcha_balance())
+            response = ZimukuCaptchaBalanceResponse(balance=provider.captcha_balance())
         except Exception as error:
+            _record_runtime_health(request, "zimuku_captcha", "failed")
             raise HTTPException(status_code=502, detail="Anti-Captcha balance check failed") from error
+        _record_runtime_health(request, "zimuku_captcha", "ok")
+        return response
 
     @router.get(
         "/jellyfin/libraries",
@@ -1883,13 +1896,25 @@ def _record_runtime_health(request: Request, name: str, status: str) -> None:
     with session_scope(request.app.state.engine) as session:
         repo = Repository(session)
         metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
-        metadata.update(
-            {
-                f"{name}_last_check_status": status,
-                f"{name}_last_checked_at": datetime.now(UTC).isoformat(),
-            }
-        )
+        checked_at = datetime.now(UTC).isoformat()
+        names = {name}
+        if name in {"zimuku_ocr", "zimuku_captcha"}:
+            names.add("zimuku")
+        for health_name in names:
+            metadata.update(
+                {
+                    f"{health_name}_last_check_status": status,
+                    f"{health_name}_last_checked_at": checked_at,
+                }
+            )
         repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+
+
+def _clear_runtime_health(repo: Repository, name: str) -> None:
+    metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+    metadata.pop(f"{name}_last_check_status", None)
+    metadata.pop(f"{name}_last_checked_at", None)
+    repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
 
 
 def _find_jellyfin_library(client, library_id: str) -> dict[str, str]:

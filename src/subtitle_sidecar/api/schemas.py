@@ -572,21 +572,25 @@ class QueueDiagnosticResponse(BaseModel):
 class SubliminalProviderDiagnosticResponse(BaseModel):
     enabled: bool
     status: str
+    last_checked_at: str | None = None
 
 
 class AssrtProviderDiagnosticResponse(BaseModel):
     enabled: bool
     status: str
+    last_checked_at: str | None = None
 
 
 class SubdlProviderDiagnosticResponse(BaseModel):
     enabled: bool
     status: str
+    last_checked_at: str | None = None
 
 
 class ZimukuProviderDiagnosticResponse(BaseModel):
     enabled: bool
     status: str
+    last_checked_at: str | None = None
 
 
 class ProviderDiagnosticsResponse(BaseModel):

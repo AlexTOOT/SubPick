@@ -68,15 +68,22 @@ def build_diagnostics(
         _check("database", database["status"]),
         *[_check(f"tool:{item['name']}", item["status"]) for item in tools],
     ]
-    overall_status = "degraded" if any(item["status"] == "degraded" for item in checks) else "ok"
-
     cooldowns = _provider_cooldowns(provider_scheduler)
     providers = {
         "subliminal": _subliminal_diagnostic(settings, engine),
-        "assrt": _assrt_diagnostic(settings, engine),
-        "subdl": _subdl_diagnostic(settings, engine),
-        "zimuku": _zimuku_diagnostic(settings, engine),
+        "assrt": _assrt_diagnostic(settings, engine, runtime_metadata),
+        "subdl": _subdl_diagnostic(settings, engine, runtime_metadata),
+        "zimuku": _zimuku_diagnostic(settings, engine, runtime_metadata),
     }
+    provider_failed = any(
+        item.get("enabled") and item.get("status") in {"failed", "error", "unavailable"}
+        for item in providers.values()
+    )
+    overall_status = (
+        "degraded"
+        if provider_failed or any(item["status"] == "degraded" for item in checks)
+        else "ok"
+    )
     setup = _setup_status(
         config_file=config_file,
         data_dir=data_dir,
@@ -159,7 +166,7 @@ def _setup_status(
         for item in (config_file, data_dir, cache_dir, database)
     )
     provider_ready = any(
-        item.get("enabled") and item.get("status") not in {"disabled", "unconfigured"}
+        item.get("enabled") and item.get("status") == "ok"
         for item in providers.values()
     )
     steps = [
@@ -417,10 +424,18 @@ def _subliminal_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]
         stored = None
     config = merge_subliminal_provider_settings(settings.providers.subliminal, stored)
     enabled = config.enabled
-    return {"enabled": enabled, "status": "ok" if enabled else "disabled"}
+    return {
+        "enabled": enabled,
+        "status": "ok" if enabled else "disabled",
+        "last_checked_at": None,
+    }
 
 
-def _assrt_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
+def _assrt_diagnostic(
+    settings: AppSettings,
+    engine: Any,
+    runtime_metadata: dict[str, Any],
+) -> dict[str, Any]:
     stored = None
     try:
         with session_scope(engine) as session:
@@ -433,11 +448,19 @@ def _assrt_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
     elif not config.token:
         status = "unconfigured"
     else:
-        status = "configured"
-    return {"enabled": config.enabled, "status": status}
+        status = _stored_provider_status(runtime_metadata, "assrt")
+    return {
+        "enabled": config.enabled,
+        "status": status,
+        "last_checked_at": runtime_metadata.get("assrt_last_checked_at"),
+    }
 
 
-def _subdl_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
+def _subdl_diagnostic(
+    settings: AppSettings,
+    engine: Any,
+    runtime_metadata: dict[str, Any],
+) -> dict[str, Any]:
     stored = None
     try:
         with session_scope(engine) as session:
@@ -450,11 +473,19 @@ def _subdl_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
     elif not config.api_key:
         status = "unconfigured"
     else:
-        status = "configured"
-    return {"enabled": config.enabled, "status": status}
+        status = _stored_provider_status(runtime_metadata, "subdl")
+    return {
+        "enabled": config.enabled,
+        "status": status,
+        "last_checked_at": runtime_metadata.get("subdl_last_checked_at"),
+    }
 
 
-def _zimuku_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
+def _zimuku_diagnostic(
+    settings: AppSettings,
+    engine: Any,
+    runtime_metadata: dict[str, Any],
+) -> dict[str, Any]:
     stored = None
     try:
         with session_scope(engine) as session:
@@ -467,8 +498,24 @@ def _zimuku_diagnostic(settings: AppSettings, engine: Any) -> dict[str, Any]:
     elif not config.moviepilot_ocr_url and not config.anti_captcha_api_key:
         status = "unconfigured"
     else:
-        status = "configured"
-    return {"enabled": config.enabled, "status": status}
+        status = _stored_provider_status(runtime_metadata, "zimuku")
+    return {
+        "enabled": config.enabled,
+        "status": status,
+        "last_checked_at": runtime_metadata.get("zimuku_last_checked_at")
+        or runtime_metadata.get("zimuku_ocr_last_checked_at"),
+    }
+
+
+def _stored_provider_status(runtime_metadata: dict[str, Any], name: str) -> str:
+    value = runtime_metadata.get(f"{name}_last_check_status")
+    if name == "zimuku" and value is None:
+        value = runtime_metadata.get("zimuku_ocr_last_check_status")
+    if value == "ok":
+        return "ok"
+    if value in {"failed", "error"}:
+        return "failed"
+    return "unverified"
 
 
 def _check(name: str, status: str) -> dict[str, str]:

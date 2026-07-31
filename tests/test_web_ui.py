@@ -94,7 +94,8 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "选择整剧" in js
     assert "全选本季" in js
     assert "字幕产物" in js
-    assert "autoCheckProviders" in js
+    assert "providerDiagnosticStatus" in js
+    assert "autoCheckProviders" not in js
     assert "drawerOpenSeasons" in js
     assert "getRandomValues" in js
     assert "grid-template-rows: 18px 40px 18px" in css

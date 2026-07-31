@@ -83,7 +83,8 @@ def test_zimuku_settings_are_persisted_redacted_and_balance_can_be_checked(tmp_p
     )
     assert "zimuku" in providers.json()["providers"]
     assert balance.json() == {"balance": 12.345}
-    assert diagnostics.json()["providers"]["zimuku"]["status"] == "configured"
+    assert diagnostics.json()["providers"]["zimuku"]["status"] == "ok"
+    assert diagnostics.json()["providers"]["zimuku"]["last_checked_at"]
     assert "anti-captcha-secret" not in f"{loaded.json()}{diagnostics.json()}"
 
 
