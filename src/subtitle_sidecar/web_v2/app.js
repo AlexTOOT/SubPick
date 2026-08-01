@@ -194,6 +194,8 @@ function providerDiagnosticStatus(value) {
 function renderSetupStatus() {
   const setup = state.diagnostics?.setup;
   if (!setup) return;
+  const setupOpen = $("#setup-open");
+  if (setupOpen) setupOpen.hidden = setup.completed;
   const progress = $("#setup-progress");
   progress.hidden = setup.completed;
   progress.innerHTML = setup.completed ? "" : (setup.steps || []).map((step) => `
@@ -261,6 +263,15 @@ function renderSetupDialog() {
 function maybeOpenSetupDialog() {
   const setup = state.diagnostics?.setup;
   if (!setup || setup.completed || window.localStorage.getItem("subpick-setup-dismissed-v2")) return;
+  $("#setup-dialog").hidden = false;
+  renderSetupDialog();
+}
+
+function openSetupDialog() {
+  const setup = state.diagnostics?.setup;
+  if (!setup || setup.completed) return;
+  window.localStorage.removeItem("subpick-setup-dismissed-v2");
+  initializeSetupWizard();
   $("#setup-dialog").hidden = false;
   renderSetupDialog();
 }
@@ -2286,6 +2297,7 @@ function bindEvents() {
   $("#path-mapping-add").addEventListener("click", () => addPathMapping());
   $("#path-mapping-test").addEventListener("click", testPathMappings);
   $("#path-mapping-save").addEventListener("click", savePathMappings);
+  $("#setup-open").addEventListener("click", openSetupDialog);
   $("#path-mapping-rows").addEventListener("click", (event) => {
     const remove = event.target.closest("[data-path-remove]");
     if (!remove) return;
