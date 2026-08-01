@@ -56,6 +56,7 @@
           </div>
           <div id="setup-progress" class="setup-progress" aria-label="首次配置进度" hidden></div>
           <div class="top-actions">
+            <button id="setup-top-action" class="setup-top-action" type="button" hidden>继续设置向导</button>
             <span id="queue-chip" class="chip">队列 --</span>
             <span id="provider-chip" class="chip">Provider --</span>
             <button id="global-refresh" class="icon-button" type="button" title="刷新当前页面" aria-label="刷新当前页面">↻</button>
@@ -266,7 +267,7 @@
                 </details>
                 <div class="form-actions split-actions">
                   <span>
-                    <button id="setup-open" type="button">继续设置向导</button>
+                    <button id="setup-open" type="button">打开设置向导</button>
                     <button id="settings-export" type="button">导出配置</button>
                     <button id="settings-import" type="button">导入配置</button>
                     <input id="settings-import-file" type="file" accept="application/json,.json" hidden>

@@ -43,7 +43,7 @@ const state = {
   dependencyUpdates: null,
   healthChecks: [],
   healthRunning: false,
-  setupWizard: { initialized: false, page: 0, busy: false, draft: {} },
+  setupWizard: { initialized: false, page: 0, busy: false, direction: "none", forceOpen: false, draft: {} },
   toastTimer: null,
 };
 
@@ -158,6 +158,63 @@ function renderHeaderStatus() {
   renderSetupStatus();
 }
 
+function validationError(message, selectors = []) {
+  const error = new Error(message);
+  error.validationSelectors = selectors;
+  return error;
+}
+
+function attachValidationSelectors(error, selectors) {
+  error.validationSelectors = selectors;
+  return error;
+}
+
+function clearInvalidField(node) {
+  node.classList.remove("field-invalid");
+  node.removeAttribute("aria-invalid");
+  node.closest("label, fieldset, .setup-provider, .path-mapping-row")?.classList.remove("field-invalid-group");
+}
+
+function showValidationFailure(container, selectors = []) {
+  if (!container) return;
+  container.classList.remove("validation-shake");
+  void container.offsetWidth;
+  container.classList.add("validation-shake");
+  window.setTimeout(() => container.classList.remove("validation-shake"), 520);
+  const fields = selectors.flatMap((selector) => $$(selector, container));
+  fields.forEach((field) => {
+    field.classList.add("field-invalid");
+    field.setAttribute("aria-invalid", "true");
+    field.closest("label, fieldset, .setup-provider, .path-mapping-row")?.classList.add("field-invalid-group");
+  });
+  fields.find((field) => typeof field.focus === "function")?.focus({ preventScroll: true });
+}
+
+function animateDisclosure(details, event) {
+  if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.dataset.animating === "true") {
+    event.preventDefault();
+    return;
+  }
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || typeof details.animate !== "function") return;
+  event.preventDefault();
+  const startHeight = details.getBoundingClientRect().height;
+  const opening = !details.open;
+  if (opening) details.open = true;
+  const endHeight = opening ? details.scrollHeight : details.querySelector(":scope > summary")?.getBoundingClientRect().height || 0;
+  details.dataset.animating = "true";
+  details.classList.add("disclosure-animating");
+  const animation = details.animate(
+    [{ height: `${startHeight}px`, opacity: opening ? 0.86 : 1 }, { height: `${endHeight}px`, opacity: opening ? 1 : 0.9 }],
+    { duration: 220, easing: "cubic-bezier(.2,.75,.25,1)" },
+  );
+  animation.finished.catch(() => {}).finally(() => {
+    if (!opening) details.open = false;
+    details.classList.remove("disclosure-animating");
+    delete details.dataset.animating;
+  });
+}
+
 function systemLogCategoryLabel(value) {
   return ({
     system: "系统",
@@ -195,7 +252,13 @@ function renderSetupStatus() {
   const setup = state.diagnostics?.setup;
   if (!setup) return;
   const setupOpen = $("#setup-open");
-  if (setupOpen) setupOpen.hidden = setup.completed;
+  if (setupOpen) {
+    setupOpen.hidden = false;
+    setupOpen.textContent = setup.completed ? "打开设置向导" : "继续设置向导";
+    setupOpen.classList.toggle("setup-action-required", !setup.completed);
+  }
+  const setupTopAction = $("#setup-top-action");
+  setupTopAction.hidden = setup.completed;
   const progress = $("#setup-progress");
   progress.hidden = setup.completed;
   progress.innerHTML = setup.completed ? "" : (setup.steps || []).map((step) => `
@@ -231,13 +294,13 @@ function renderSetupStatus() {
 
 function renderSetupDialog() {
   const setup = state.diagnostics?.setup;
-  if (!setup || setup.completed) {
+  const wizard = state.setupWizard;
+  if (!setup || (setup.completed && !wizard.forceOpen)) {
     $("#setup-dialog").hidden = true;
     return;
   }
   if (!state.jellyfinSettings || !state.serverSettings || !Object.keys(state.providerSettings).length) return;
   initializeSetupWizard();
-  const wizard = state.setupWizard;
   const pages = ["欢迎", "Jellyfin", "字幕来源", "MoviePilot", "完成"];
   const titles = ["欢迎使用拾幕", "连接 Jellyfin", "选择字幕来源", "连接 MoviePilot", "配置完成"];
   const descriptions = [
@@ -252,7 +315,9 @@ function renderSetupDialog() {
   $("#setup-wizard-progress").innerHTML = pages.map((label, index) => `
     <li class="${index < wizard.page ? "done" : index === wizard.page ? "current" : ""}">${escapeHtml(label)}</li>
   `).join("");
-  $("#setup-dialog-body").innerHTML = setupWizardPageHtml(wizard.page, wizard.draft);
+  const direction = wizard.direction === "backward" ? "backward" : wizard.direction === "forward" ? "forward" : "none";
+  $("#setup-dialog-body").innerHTML = `<div class="setup-page setup-page-${direction}">${setupWizardPageHtml(wizard.page, wizard.draft)}</div>`;
+  wizard.direction = "none";
   $("#setup-back").hidden = wizard.page === 0 || wizard.page === pages.length - 1;
   $("#setup-continue").textContent = wizard.page === 0 ? "开始设置" : wizard.page === pages.length - 1 ? "完成" : "下一步";
   $("#setup-continue").disabled = wizard.busy;
@@ -269,8 +334,13 @@ function maybeOpenSetupDialog() {
 
 function openSetupDialog() {
   const setup = state.diagnostics?.setup;
-  if (!setup || setup.completed) return;
+  if (!setup) return;
   window.localStorage.removeItem("subpick-setup-dismissed-v2");
+  state.setupWizard.forceOpen = true;
+  if (setup.completed) {
+    state.setupWizard.initialized = false;
+    window.localStorage.removeItem("subpick-setup-page-v2");
+  }
   initializeSetupWizard();
   $("#setup-dialog").hidden = false;
   renderSetupDialog();
@@ -278,6 +348,7 @@ function openSetupDialog() {
 
 function closeSetupDialog() {
   $("#setup-dialog").hidden = true;
+  state.setupWizard.forceOpen = false;
 }
 
 function randomToken() {
@@ -368,11 +439,11 @@ function setupWizardPageHtml(page, draft) {
 function setupProvidersPageHtml(draft) {
   return `
     <div class="setup-provider-list">
-      <section class="setup-provider">
+      <section class="setup-provider" data-setup-provider="zimuku">
         <label><input id="setup-zimuku-enabled" type="checkbox" ${checked(draft.zimukuEnabled)}>Zimuku（推荐）</label>
         <small>无需账号，使用 Compose 内置的验证码识别服务。</small>
       </section>
-      <section class="setup-provider">
+      <section class="setup-provider" data-setup-provider="subliminal">
         <label><input id="setup-subliminal-enabled" type="checkbox" ${checked(draft.subliminalEnabled)}>Subliminal</label>
         <small>通用字幕来源。OpenSubtitles 可匿名使用，但额度较低。</small>
         ${draft.subliminalEnabled ? `<div class="setup-provider-fields">
@@ -390,12 +461,12 @@ function setupProvidersPageHtml(draft) {
             <label>OpenSubtitles.com API Key<input id="setup-opensubtitlescom-apikey" type="password" value="${escapeHtml(draft.opensubtitlescomApiKey)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomApiKeyConfigured, true)}</label>` : ""}
         </div>` : ""}
       </section>
-      <section class="setup-provider">
+      <section class="setup-provider" data-setup-provider="assrt">
         <label><input id="setup-assrt-enabled" type="checkbox" ${checked(draft.assrtEnabled)}>ASSRT</label>
         <small>中文资源丰富。<a href="https://assrt.net/user/register.xml" target="_blank" rel="noreferrer">注册</a>后在<a href="https://secure.assrt.net/usercp.php" target="_blank" rel="noreferrer">用户面板</a>获取 API Key。</small>
         ${draft.assrtEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-assrt-token" type="password" value="${escapeHtml(draft.assrtToken)}" autocomplete="new-password">${setupSecretHint(draft.assrtTokenConfigured, true)}</label></div>` : ""}
       </section>
-      <section class="setup-provider">
+      <section class="setup-provider" data-setup-provider="subdl">
         <label><input id="setup-subdl-enabled" type="checkbox" ${checked(draft.subdlEnabled)}>SubDL</label>
         <small>支持 IMDb/TMDb 检索。<a href="https://subdl.com/register" target="_blank" rel="noreferrer">注册</a>后在<a href="https://subdl.com/panel/api" target="_blank" rel="noreferrer">API 面板</a>获取 API Key。</small>
         ${draft.subdlEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-subdl-key" type="password" value="${escapeHtml(draft.subdlApiKey)}" autocomplete="new-password">${setupSecretHint(draft.subdlApiKeyConfigured, true)}</label></div>` : ""}
@@ -444,16 +515,23 @@ async function scanAllJellyfinLibraries() {
 
 async function saveSetupJellyfin() {
   const draft = state.setupWizard.draft;
-  if (!draft.jellyfinUrl) throw new Error("请填写 Jellyfin 地址");
-  if (!draft.jellyfinKey && !state.jellyfinSettings.api_key_configured) throw new Error("请填写 Jellyfin API Key");
+  if (!draft.jellyfinUrl) throw validationError("请填写 Jellyfin 地址", ["#setup-jellyfin-url"]);
+  if (!draft.jellyfinKey && !state.jellyfinSettings.api_key_configured) {
+    throw validationError("请填写 Jellyfin API Key", ["#setup-jellyfin-key"]);
+  }
   const wasConfigured = Boolean(state.jellyfinSettings.configured);
   const body = { server_url: draft.jellyfinUrl };
   if (draft.jellyfinKey) body.api_key = draft.jellyfinKey;
   setSetupStatus("正在保存并测试 Jellyfin 连接…");
-  const { payload: settings } = await api("/api/v1/jellyfin/settings", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  await api("/api/v1/jellyfin/check", { method: "POST" });
+  let settings;
+  try {
+    ({ payload: settings } = await api("/api/v1/jellyfin/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+    await api("/api/v1/jellyfin/check", { method: "POST" });
+  } catch (error) {
+    throw attachValidationSelectors(error, ["#setup-jellyfin-url", "#setup-jellyfin-key"]);
+  }
   state.jellyfinSettings = settings;
   draft.jellyfinKey = "";
   if (!wasConfigured) await scanAllJellyfinLibraries();
@@ -461,31 +539,48 @@ async function saveSetupJellyfin() {
 
 async function saveSetupProviders() {
   const draft = state.setupWizard.draft;
-  if (![draft.zimukuEnabled, draft.subliminalEnabled, draft.assrtEnabled, draft.subdlEnabled].some(Boolean)) throw new Error("请至少启用一个字幕来源");
-  if (draft.subliminalEnabled && !draft.opensubtitlesEnabled && !draft.opensubtitlescomEnabled) throw new Error("启用 Subliminal 时至少选择一个字幕源");
+  if (![draft.zimukuEnabled, draft.subliminalEnabled, draft.assrtEnabled, draft.subdlEnabled].some(Boolean)) {
+    throw validationError("请至少启用一个字幕来源", [".setup-provider-list"]);
+  }
+  if (draft.subliminalEnabled && !draft.opensubtitlesEnabled && !draft.opensubtitlescomEnabled) {
+    throw validationError("启用 Subliminal 时至少选择一个字幕源", ['[data-setup-provider="subliminal"] .option-row']);
+  }
   if (draft.opensubtitlescomEnabled && draft.subliminalEnabled) {
     const complete = draft.opensubtitlescomUsername
       && (draft.opensubtitlescomPassword || draft.opensubtitlescomPasswordConfigured)
       && (draft.opensubtitlescomApiKey || draft.opensubtitlescomApiKeyConfigured);
-    if (!complete) throw new Error("OpenSubtitles.com 必须填写用户名、密码和 API Key");
+    if (!complete) {
+      throw validationError("OpenSubtitles.com 必须填写用户名、密码和 API Key", [
+        "#setup-opensubtitlescom-username", "#setup-opensubtitlescom-password", "#setup-opensubtitlescom-apikey",
+      ]);
+    }
   }
-  if (draft.assrtEnabled && !draft.assrtToken && !draft.assrtTokenConfigured) throw new Error("启用 ASSRT 前请填写 API Key");
-  if (draft.subdlEnabled && !draft.subdlApiKey && !draft.subdlApiKeyConfigured) throw new Error("启用 SubDL 前请填写 API Key");
+  if (draft.assrtEnabled && !draft.assrtToken && !draft.assrtTokenConfigured) {
+    throw validationError("启用 ASSRT 前请填写 API Key", ["#setup-assrt-token"]);
+  }
+  if (draft.subdlEnabled && !draft.subdlApiKey && !draft.subdlApiKeyConfigured) {
+    throw validationError("启用 SubDL 前请填写 API Key", ["#setup-subdl-key"]);
+  }
 
   const currentZimuku = state.providerSettings.zimuku || {};
   setSetupStatus("正在保存并检查 Zimuku…");
-  const { payload: zimuku } = await api("/api/v1/providers/zimuku/settings", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-      enabled: draft.zimukuEnabled,
-      moviepilot_ocr_url: currentZimuku.moviepilot_ocr_url || "http://moviepilot-ocr:9899",
-      captcha_debug_capture: Boolean(currentZimuku.captcha_debug_capture),
-      base_url: currentZimuku.base_url || "https://srtku.com",
-      timeout_seconds: currentZimuku.timeout_seconds || 30,
-      request_delay_seconds: currentZimuku.request_delay_seconds ?? 1,
-    }),
-  });
+  let zimuku;
+  try {
+    ({ payload: zimuku } = await api("/api/v1/providers/zimuku/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        enabled: draft.zimukuEnabled,
+        moviepilot_ocr_url: currentZimuku.moviepilot_ocr_url || "http://moviepilot-ocr:9899",
+        captcha_debug_capture: Boolean(currentZimuku.captcha_debug_capture),
+        base_url: currentZimuku.base_url || "https://srtku.com",
+        timeout_seconds: currentZimuku.timeout_seconds || 30,
+        request_delay_seconds: currentZimuku.request_delay_seconds ?? 1,
+      }),
+    }));
+    if (draft.zimukuEnabled) await api("/api/v1/providers/zimuku/ocr-check", { method: "POST" });
+  } catch (error) {
+    throw attachValidationSelectors(error, ['[data-setup-provider="zimuku"]']);
+  }
   state.providerSettings.zimuku = zimuku;
-  if (draft.zimukuEnabled) await api("/api/v1/providers/zimuku/ocr-check", { method: "POST" });
 
   const authentication = {
     opensubtitles: { username: draft.opensubtitlesUsername },
@@ -495,22 +590,32 @@ async function saveSetupProviders() {
   if (draft.opensubtitlescomPassword) authentication.opensubtitlescom.password = draft.opensubtitlescomPassword;
   if (draft.opensubtitlescomApiKey) authentication.opensubtitlescom.apikey = draft.opensubtitlescomApiKey;
   setSetupStatus("正在保存 Subliminal…");
-  const { payload: subliminal } = await api("/api/v1/providers/subliminal/settings", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-      enabled: draft.subliminalEnabled,
-      providers: [draft.opensubtitlesEnabled && "opensubtitles", draft.opensubtitlescomEnabled && "opensubtitlescom"].filter(Boolean),
-      languages: ["zh-cn", "zh-hant"],
-      authentication,
-    }),
-  });
+  let subliminal;
+  try {
+    ({ payload: subliminal } = await api("/api/v1/providers/subliminal/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        enabled: draft.subliminalEnabled,
+        providers: [draft.opensubtitlesEnabled && "opensubtitles", draft.opensubtitlescomEnabled && "opensubtitlescom"].filter(Boolean),
+        languages: ["zh-cn", "zh-hant"],
+        authentication,
+      }),
+    }));
+  } catch (error) {
+    throw attachValidationSelectors(error, ['[data-setup-provider="subliminal"]']);
+  }
   state.providerSettings.subliminal = subliminal;
 
   setSetupStatus(draft.assrtEnabled ? "正在验证 ASSRT API Key…" : "正在保存 ASSRT…");
   const assrtBody = { enabled: draft.assrtEnabled, timeout_seconds: 15, requests_per_minute: 5 };
   if (draft.assrtToken) assrtBody.token = draft.assrtToken;
-  const { payload: assrt } = await api("/api/v1/providers/assrt/settings", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(assrtBody),
-  });
+  let assrt;
+  try {
+    ({ payload: assrt } = await api("/api/v1/providers/assrt/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(assrtBody),
+    }));
+  } catch (error) {
+    throw attachValidationSelectors(error, ["#setup-assrt-token"]);
+  }
   state.providerSettings.assrt = assrt;
   draft.assrtToken = "";
   draft.assrtTokenConfigured = assrt.token_configured;
@@ -518,9 +623,14 @@ async function saveSetupProviders() {
   setSetupStatus(draft.subdlEnabled ? "正在验证 SubDL API Key…" : "正在保存 SubDL…");
   const subdlBody = { enabled: draft.subdlEnabled, timeout_seconds: 15, requests_per_minute: 20, use_api_key_for_downloads: false };
   if (draft.subdlApiKey) subdlBody.api_key = draft.subdlApiKey;
-  const { payload: subdl } = await api("/api/v1/providers/subdl/settings", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subdlBody),
-  });
+  let subdl;
+  try {
+    ({ payload: subdl } = await api("/api/v1/providers/subdl/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subdlBody),
+    }));
+  } catch (error) {
+    throw attachValidationSelectors(error, ["#setup-subdl-key"]);
+  }
   state.providerSettings.subdl = subdl;
   draft.subdlApiKey = "";
   draft.subdlApiKeyConfigured = subdl.api_key_configured;
@@ -528,7 +638,7 @@ async function saveSetupProviders() {
 
 async function saveSetupMoviePilot() {
   const token = state.setupWizard.draft.moviepilotToken.trim();
-  if (!token) throw new Error("请生成 MoviePilot API Token");
+  if (!token) throw validationError("请生成 MoviePilot API Token", ["#setup-moviepilot-token"]);
   setSetupStatus("正在保存 MoviePilot 通信 Token…");
   const { payload } = await api("/api/v1/server/settings", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
@@ -549,6 +659,7 @@ async function continueSetupWizard() {
   wizard.busy = true;
   setSetupStatus("");
   renderSetupDialog();
+  let failure = null;
   try {
     if (wizard.page === 1) await saveSetupJellyfin();
     if (wizard.page === 2) await saveSetupProviders();
@@ -556,12 +667,18 @@ async function continueSetupWizard() {
     wizard.page += 1;
     window.localStorage.setItem("subpick-setup-page-v2", String(wizard.page));
     await loadDiagnostics();
+    wizard.direction = "forward";
     setSetupStatus("");
   } catch (error) {
+    failure = error;
     setSetupStatus(error.message, "error");
   } finally {
     wizard.busy = false;
     renderSetupDialog();
+    if (failure) {
+      setSetupStatus(failure.message, "error");
+      showValidationFailure($(".setup-dialog"), failure.validationSelectors || [".setup-page"]);
+    }
   }
 }
 
@@ -569,6 +686,7 @@ function backSetupWizard() {
   if (state.setupWizard.busy || state.setupWizard.page <= 0) return;
   collectSetupWizardPage();
   state.setupWizard.page -= 1;
+  state.setupWizard.direction = "backward";
   window.localStorage.setItem("subpick-setup-page-v2", String(state.setupWizard.page));
   setSetupStatus("");
   renderSetupDialog();
@@ -1612,9 +1730,11 @@ async function testPathMappings() {
     output.innerHTML = payload.exists
       ? `测试通过：<code>${escapeHtml(payload.original_path)}</code> → <code>${escapeHtml(payload.resolved_path)}</code>`
       : `测试失败：转换为 <code>${escapeHtml(payload.resolved_path || payload.original_path || "未知")}</code> 后仍未找到文件。`;
+    if (!payload.exists) showValidationFailure($("#path-mapping-settings"), [".path-mapping-row input"]);
   } catch (error) {
     output.className = "path-mapping-result error";
     output.textContent = error.message;
+    showValidationFailure($("#path-mapping-settings"), [".path-mapping-row input"]);
   }
 }
 
@@ -1635,6 +1755,7 @@ async function savePathMappings() {
   } catch (error) {
     output.className = "path-mapping-result error";
     output.textContent = error.message;
+    showValidationFailure($("#path-mapping-settings"), [".path-mapping-row input"]);
   }
 }
 
@@ -1664,8 +1785,19 @@ async function saveProviderOrder() {
 
 async function saveJellyfin(event) {
   event.preventDefault();
+  const form = $("#jellyfin-form");
   const body = { server_url: $("#jellyfin-url").value.trim() };
   if ($("#jellyfin-key").value.trim()) body.api_key = $("#jellyfin-key").value.trim();
+  if (!body.server_url) {
+    showToast("请填写 Jellyfin 地址", true);
+    showValidationFailure(form, ["#jellyfin-url"]);
+    return;
+  }
+  if (!body.api_key && !state.jellyfinSettings.api_key_configured) {
+    showToast("请填写 Jellyfin API Key", true);
+    showValidationFailure(form, ["#jellyfin-key"]);
+    return;
+  }
   try {
     const { payload } = await api("/api/v1/jellyfin/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -1676,7 +1808,10 @@ async function saveJellyfin(event) {
     $("#jellyfin-key-status").textContent = payload.api_key_configured ? "API Key 已配置" : "尚未配置 API Key";
     await loadDiagnostics();
     showToast("Jellyfin 配置已保存");
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) {
+    showToast(error.message, true);
+    showValidationFailure(form, ["#jellyfin-url", "#jellyfin-key"]);
+  }
 }
 
 function connectOverviewEvents() {
@@ -1892,6 +2027,7 @@ async function checkJellyfin() {
   } catch (error) {
     await loadDiagnostics().catch(() => {});
     showToast(error.message, true);
+    showValidationFailure($("#jellyfin-form"), ["#jellyfin-url", "#jellyfin-key"]);
   }
 }
 
@@ -1920,7 +2056,10 @@ async function saveGitHub(event) {
       : "未配置时使用 GitHub 匿名 API 配额。";
     await loadDiagnostics();
     showToast("系统配置已保存");
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) {
+    showToast(error.message, true);
+    showValidationFailure($("#github-form"), ["#server-token", "#github-key"]);
+  }
 }
 
 function generateServerToken() {
@@ -1967,6 +2106,52 @@ function providerValue(name, key) {
 
 function providerNumber(name, key, fallback) {
   return Number(providerValue(name, key)) || fallback;
+}
+
+function providerValidationIssue(name, card) {
+  const settings = state.providerSettings[name] || {};
+  const enabled = providerInput(name, "enabled")?.checked === true;
+  if (!enabled) return null;
+  if (name === "subliminal") {
+    const sources = $$('[data-subliminal-source]', card).filter((node) => node.checked).map((node) => node.dataset.subliminalSource);
+    if (!sources.length) return { message: "启用 Subliminal 时至少选择一个字幕源", selectors: ["[data-subliminal-source]"] };
+    const languages = $$('[data-subliminal-language]', card).filter((node) => node.checked);
+    if (!languages.length) return { message: "请至少选择一种中文字幕语言", selectors: ["[data-subliminal-language]"] };
+    if (sources.includes("opensubtitlescom")) {
+      const auth = settings.authentication?.opensubtitlescom || {};
+      const missing = [];
+      if (!$('[data-auth="opensubtitlescom-username"]', card)?.value.trim()) missing.push('[data-auth="opensubtitlescom-username"]');
+      if (!$('[data-auth="opensubtitlescom-password"]', card)?.value && !auth.password_configured) missing.push('[data-auth="opensubtitlescom-password"]');
+      if (!$('[data-auth="opensubtitlescom-apikey"]', card)?.value && !auth.apikey_configured) missing.push('[data-auth="opensubtitlescom-apikey"]');
+      if (missing.length) return { message: "OpenSubtitles.com 必须填写用户名、密码和 API Key", selectors: missing };
+    }
+  }
+  if (name === "assrt" && !providerValue(name, "token") && !settings.token_configured) {
+    return { message: "启用 ASSRT 前请填写 API Key", selectors: ['[data-setting="token"]'] };
+  }
+  if (name === "subdl" && !providerValue(name, "api_key") && !settings.api_key_configured) {
+    return { message: "启用 SubDL 前请填写 API Key", selectors: ['[data-setting="api_key"]'] };
+  }
+  if (name === "zimuku"
+      && !providerValue(name, "moviepilot_ocr_url")
+      && !providerValue(name, "anti_captcha_api_key")
+      && !settings.anti_captcha_api_key_configured) {
+    return {
+      message: "启用 Zimuku 前请填写 MoviePilot OCR 地址",
+      selectors: ['[data-setting="moviepilot_ocr_url"]', '[data-setting="anti_captcha_api_key"]'],
+    };
+  }
+  return null;
+}
+
+function providerFailureSelectors(name) {
+  const selectors = {
+    subliminal: ['[data-auth="opensubtitlescom-username"]', '[data-auth="opensubtitlescom-password"]', '[data-auth="opensubtitlescom-apikey"]'],
+    assrt: ['[data-setting="token"]'],
+    subdl: ['[data-setting="api_key"]'],
+    zimuku: ['[data-setting="moviepilot_ocr_url"]', '[data-setting="anti_captcha_api_key"]'],
+  };
+  return selectors[name] || [];
 }
 
 async function saveProviderSettings(name) {
@@ -2025,6 +2210,12 @@ async function saveProviderSettings(name) {
     showToast("该外部 Provider 尚未提供 WebUI 配置描述", true);
     return;
   }
+  const validationIssue = providerValidationIssue(name, card);
+  if (validationIssue) {
+    showToast(validationIssue.message, true);
+    showValidationFailure(card, validationIssue.selectors);
+    return;
+  }
   try {
     const { payload } = await api(`/api/v1/providers/${encodeURIComponent(name)}/settings`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -2037,7 +2228,10 @@ async function saveProviderSettings(name) {
     renderProviderOrder();
     $("#settings-status").textContent = `${state.providerAdapters.find((item) => item.name === name)?.display_name || name} 配置已保存。`;
     showToast("Provider 配置已保存");
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) {
+    showToast(error.message, true);
+    showValidationFailure(card, providerFailureSelectors(name));
+  }
 }
 
 async function checkProvider(action, name) {
@@ -2059,6 +2253,9 @@ async function checkProvider(action, name) {
   }
   await loadDiagnostics().catch(() => {});
   renderProviderOrder();
+  if (state.providerChecks[name]?.ok === false) {
+    showValidationFailure(providerCard(name), providerFailureSelectors(name));
+  }
 }
 
 function openDrawer(eyebrow, title, html, { seriesId = null } = {}) {
@@ -2298,6 +2495,7 @@ function bindEvents() {
   $("#path-mapping-test").addEventListener("click", testPathMappings);
   $("#path-mapping-save").addEventListener("click", savePathMappings);
   $("#setup-open").addEventListener("click", openSetupDialog);
+  $("#setup-top-action").addEventListener("click", openSetupDialog);
   $("#path-mapping-rows").addEventListener("click", (event) => {
     const remove = event.target.closest("[data-path-remove]");
     if (!remove) return;
@@ -2321,6 +2519,19 @@ function bindEvents() {
     state.setupWizard.draft.moviepilotToken = randomToken();
     renderSetupDialog();
     $("#setup-moviepilot-token")?.focus();
+  });
+  document.addEventListener("input", (event) => {
+    if (event.target.matches("input, select, textarea")) clearInvalidField(event.target);
+  });
+  document.addEventListener("change", (event) => {
+    if (event.target.matches("input, select, textarea")) clearInvalidField(event.target);
+  });
+  document.addEventListener("click", (event) => {
+    const summary = event.target.closest("summary");
+    const details = summary?.parentElement;
+    if (!details?.matches(".provider-config-card, .nested-settings, .health-settings, .health-version-details, .season-block")) return;
+    if (event.target.closest("button, a, input, select, textarea, [data-provider-drag]")) return;
+    animateDisclosure(details, event);
   });
   bindProviderOrderEvents();
   $("#provider-order-save").addEventListener("click", saveProviderOrder);

@@ -77,6 +77,7 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert 'id="server-token"' in html
     assert 'id="server-token-generate"' in html
     assert 'id="setup-progress"' in html
+    assert 'id="setup-top-action"' in html
     assert 'id="notification-center"' in html
     assert 'id="setup-dialog"' in html
     assert 'id="jellyfin-check"' in html
@@ -113,8 +114,11 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert '<div class="section-commandbar">' in html
     assert html.count('class="actions toolbar-actions"') == 2
     assert "浏览 Jellyfin 媒体库字幕状态，并按需创建任务" in js
-    assert "details::details-content" in css
-    assert "interpolate-size: allow-keywords" in css
+    assert "animateDisclosure" in js
+    assert "showValidationFailure" in js
+    assert "validation-shake" in css
+    assert "setup-page-forward" in css
+    assert "window.location.origin" in js
     assert '.provider-config-card[open] > summary::after { transform: rotate(90deg); }' in css
 
 
