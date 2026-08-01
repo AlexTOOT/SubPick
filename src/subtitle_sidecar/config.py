@@ -129,7 +129,7 @@ class SubdlProviderSettings(BaseModel):
 
 
 class ZimukuProviderSettings(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     anti_captcha_api_key: str = ""
     moviepilot_ocr_url: str = "http://moviepilot-ocr:9899"
     captcha_debug_capture: bool = False
@@ -345,7 +345,7 @@ def _generated_config_payload(appdata_dir: Path) -> dict[str, Any]:
         "providers": {
             "order": list(DEFAULT_PROVIDER_ORDER),
             "subliminal": {
-                "enabled": True,
+                "enabled": False,
                 "providers": list(DEFAULT_SUBLIMINAL_PROVIDERS),
                 "languages": ["zh-cn", "zh-hant"],
                 "authentication": {},
@@ -353,7 +353,7 @@ def _generated_config_payload(appdata_dir: Path) -> dict[str, Any]:
             "assrt": {"enabled": False, "token": ""},
             "subdl": {"enabled": False, "api_key": ""},
             "zimuku": {
-                "enabled": False,
+                "enabled": True,
                 "moviepilot_ocr_url": "http://moviepilot-ocr:9899",
                 "anti_captcha_api_key": "",
             },

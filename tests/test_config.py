@@ -83,7 +83,8 @@ def test_example_config_excludes_deprecated_library_paths_and_has_provider_block
     payload = yaml.safe_load(example_path.read_text(encoding="utf-8"))
 
     assert "libraries" not in payload["paths"]
-    assert payload["providers"]["subliminal"]["enabled"] is True
+    assert payload["providers"]["subliminal"]["enabled"] is False
+    assert payload["providers"]["zimuku"]["enabled"] is True
     assert payload["providers"]["subliminal"]["providers"] == [
         "opensubtitles",
         "opensubtitlescom",

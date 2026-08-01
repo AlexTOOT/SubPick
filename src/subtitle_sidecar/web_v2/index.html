@@ -299,13 +299,20 @@
     </div>
     <div id="setup-dialog" class="dialog-layer" hidden>
       <section class="dialog setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title">
-        <span class="dialog-eyebrow">首次使用</span>
-        <h2 id="setup-title">完成拾幕配置</h2>
-        <p>按顺序完成以下项目即可开始使用。现在跳过也没关系，未完成项目会保留在运行概览中。</p>
-        <div id="setup-dialog-steps" class="setup-dialog-steps"></div>
+        <header class="setup-dialog-header">
+          <span class="dialog-eyebrow">首次使用</span>
+          <h2 id="setup-title">欢迎使用拾幕</h2>
+          <p id="setup-description">几步完成必要配置，其余选项以后再调整。</p>
+          <ol id="setup-wizard-progress" class="setup-wizard-progress" aria-label="设置进度"></ol>
+        </header>
+        <div id="setup-dialog-body" class="setup-dialog-body"></div>
+        <p id="setup-dialog-status" class="setup-dialog-status" role="status"></p>
         <div class="dialog-actions">
           <button id="setup-skip" type="button">暂时跳过</button>
-          <button id="setup-continue" class="primary" type="button">继续设置</button>
+          <span class="setup-navigation">
+            <button id="setup-back" type="button">上一步</button>
+            <button id="setup-continue" class="primary" type="button">开始设置</button>
+          </span>
         </div>
       </section>
     </div>

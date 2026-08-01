@@ -27,6 +27,14 @@ class FakeFactory:
         raise AssertionError("metadata API must not instantiate adapters")
 
 
+class FakeAssrtProvider:
+    def __init__(self, config) -> None:
+        self.config = config
+
+    def quota(self) -> int:
+        return 5
+
+
 def _factories_with_external():
     factories = api_routes.discover_adapter_factories()
     return {**factories, "external_demo": FakeFactory("external_demo")}
@@ -40,6 +48,7 @@ def test_provider_order_reports_metadata_enabled_state_and_persists(
     monkeypatch.setattr(api_routes, "discover_adapter_factories", lambda: factories)
     app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
     app.state.settings.providers.adapters["external_demo"] = {"enabled": True}
+    app.state.assrt_provider_factory = FakeAssrtProvider
 
     with TestClient(app) as client:
         client.put(

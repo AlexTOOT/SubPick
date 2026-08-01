@@ -50,6 +50,7 @@ def test_assrt_settings_persist_without_returning_token_and_quota_can_be_checked
 def test_assrt_health_is_refreshed_on_service_start(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     first_app = create_app(data_dir=data_dir, job_processor=lambda task_id: None)
+    first_app.state.assrt_provider_factory = FakeAssrtProvider
     with TestClient(first_app) as client:
         client.put(
             "/api/v1/providers/assrt/settings",
@@ -66,3 +67,24 @@ def test_assrt_health_is_refreshed_on_service_start(tmp_path: Path) -> None:
 
     assert diagnostics["providers"]["assrt"]["status"] == "ok"
     assert diagnostics["providers"]["assrt"]["last_checked_at"]
+
+
+def test_assrt_enabled_settings_require_a_working_key(tmp_path: Path) -> None:
+    class BrokenAssrtProvider(FakeAssrtProvider):
+        def quota(self) -> int:
+            raise RuntimeError("invalid key")
+
+    app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
+    app.state.assrt_provider_factory = BrokenAssrtProvider
+    with TestClient(app) as client:
+        missing = client.put("/api/v1/providers/assrt/settings", json={"enabled": True})
+        invalid = client.put(
+            "/api/v1/providers/assrt/settings",
+            json={"enabled": True, "token": "invalid"},
+        )
+        loaded = client.get("/api/v1/providers/assrt/settings")
+
+    assert missing.status_code == 422
+    assert invalid.status_code == 502
+    assert loaded.json()["enabled"] is False
+    assert loaded.json()["token_configured"] is False

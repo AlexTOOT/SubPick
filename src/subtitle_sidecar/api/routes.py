@@ -83,8 +83,10 @@ from subtitle_sidecar.api.schemas import (
 )
 from subtitle_sidecar.config import (
     AppSettings,
+    AssrtProviderSettings,
     PathMapping,
     PathsSettings,
+    SubdlProviderSettings,
     merge_assrt_provider_settings,
     merge_subdl_provider_settings,
     merge_subliminal_provider_settings,
@@ -749,6 +751,24 @@ def create_api_router() -> APIRouter:
                 "languages": [language.strip() for language in payload.languages if language.strip()],
                 "authentication": authentication,
             }
+            if saved["enabled"] and not saved["providers"]:
+                raise HTTPException(status_code=422, detail="启用 Subliminal 时至少选择一个字幕源")
+            if saved["enabled"] and "opensubtitlescom" in saved["providers"]:
+                credentials = saved["authentication"].get("opensubtitlescom") or {}
+                missing = [
+                    label
+                    for key, label in (
+                        ("username", "用户名"),
+                        ("password", "密码"),
+                        ("apikey", "API Key"),
+                    )
+                    if not str(credentials.get(key) or "").strip()
+                ]
+                if missing:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"启用 OpenSubtitles.com 前请填写：{'、'.join(missing)}",
+                    )
             repo.set_setting(SUBLIMINAL_SETTING_KEY, saved)
             _record_config_event(
                 repo,
@@ -797,8 +817,27 @@ def create_api_router() -> APIRouter:
                 "timeout_seconds": payload.timeout_seconds,
                 "requests_per_minute": payload.requests_per_minute,
             }
+        config = AssrtProviderSettings(**saved)
+        if config.enabled:
+            if not config.token:
+                raise HTTPException(status_code=422, detail="启用 ASSRT 前请填写 API Key")
+            provider_factory = getattr(request.app.state, "assrt_provider_factory", None)
+            provider = provider_factory(config) if provider_factory else AssrtProvider(
+                token=config.token,
+                timeout_seconds=config.timeout_seconds,
+                requests_per_minute=config.requests_per_minute,
+            )
+            try:
+                provider.quota()
+            except Exception as error:
+                raise HTTPException(status_code=502, detail="ASSRT API Key 验证失败，配置未保存") from error
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
             repo.set_setting(ASSRT_SETTING_KEY, saved)
-            _clear_runtime_health(repo, "assrt")
+            if config.enabled:
+                _set_runtime_health(repo, "assrt", "ok")
+            else:
+                _clear_runtime_health(repo, "assrt")
             _record_config_event(
                 repo,
                 "ASSRT 配置已保存",
@@ -854,8 +893,28 @@ def create_api_router() -> APIRouter:
                 "requests_per_minute": payload.requests_per_minute,
                 "use_api_key_for_downloads": payload.use_api_key_for_downloads,
             }
+        config = SubdlProviderSettings(**saved)
+        if config.enabled:
+            if not config.api_key:
+                raise HTTPException(status_code=422, detail="启用 SubDL 前请填写 API Key")
+            provider_factory = getattr(request.app.state, "subdl_provider_factory", None)
+            provider = provider_factory(config) if provider_factory else SubdlProvider(
+                api_key=config.api_key,
+                timeout_seconds=config.timeout_seconds,
+                requests_per_minute=config.requests_per_minute,
+                use_api_key_for_downloads=config.use_api_key_for_downloads,
+            )
+            try:
+                provider.usage()
+            except Exception as error:
+                raise HTTPException(status_code=502, detail="SubDL API Key 验证失败，配置未保存") from error
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
             repo.set_setting(SUBDL_SETTING_KEY, saved)
-            _clear_runtime_health(repo, "subdl")
+            if config.enabled:
+                _set_runtime_health(repo, "subdl", "ok")
+            else:
+                _clear_runtime_health(repo, "subdl")
             _record_config_event(
                 repo,
                 "SubDL 配置已保存",
@@ -1981,19 +2040,7 @@ def _jellyfin_client(request: Request, config: dict[str, str]):
 def _record_runtime_health(request: Request, name: str, status: str) -> None:
     with session_scope(request.app.state.engine) as session:
         repo = Repository(session)
-        metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
-        checked_at = datetime.now(UTC).isoformat()
-        names = {name}
-        if name in {"zimuku_ocr", "zimuku_captcha"}:
-            names.add("zimuku")
-        for health_name in names:
-            metadata.update(
-                {
-                    f"{health_name}_last_check_status": status,
-                    f"{health_name}_last_checked_at": checked_at,
-                }
-            )
-        repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
+        _set_runtime_health(repo, name, status)
         repo.record_system_event(
             category="provider",
             event="provider_health_checked",
@@ -2001,6 +2048,22 @@ def _record_runtime_health(request: Request, name: str, status: str) -> None:
             message=f"Provider {name} 检查：{'不可用' if status == 'failed' else '可用'}",
             details={"provider": name, "status": status},
         )
+
+
+def _set_runtime_health(repo: Repository, name: str, status: str) -> None:
+    metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+    checked_at = datetime.now(UTC).isoformat()
+    names = {name}
+    if name in {"zimuku_ocr", "zimuku_captcha"}:
+        names.add("zimuku")
+    for health_name in names:
+        metadata.update(
+            {
+                f"{health_name}_last_check_status": status,
+                f"{health_name}_last_checked_at": checked_at,
+            }
+        )
+    repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
 
 
 def _record_config_event(

@@ -82,3 +82,28 @@ providers:
     assert "add-password" not in serialized
     assert "osc-password" not in serialized
     assert "osc-key" not in serialized
+
+
+def test_opensubtitlescom_requires_complete_authentication_when_enabled(tmp_path: Path) -> None:
+    app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
+    with TestClient(app) as client:
+        rejected = client.put(
+            "/api/v1/providers/subliminal/settings",
+            json={
+                "enabled": True,
+                "providers": ["opensubtitlescom"],
+                "languages": ["zh-cn"],
+                "authentication": {"opensubtitlescom": {"username": "user"}},
+            },
+        )
+        anonymous_legacy = client.put(
+            "/api/v1/providers/subliminal/settings",
+            json={
+                "enabled": True,
+                "providers": ["opensubtitles"],
+                "languages": ["zh-cn"],
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert anonymous_legacy.status_code == 200

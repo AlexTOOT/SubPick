@@ -43,6 +43,7 @@ const state = {
   dependencyUpdates: null,
   healthChecks: [],
   healthRunning: false,
+  setupWizard: { initialized: false, page: 0, busy: false, draft: {} },
   toastTimer: null,
 };
 
@@ -232,30 +233,334 @@ function renderSetupDialog() {
     $("#setup-dialog").hidden = true;
     return;
   }
-  $("#setup-dialog-steps").innerHTML = (setup.steps || []).map((step) => `
-    <button type="button" class="setup-dialog-step ${escapeHtml(step.status)}"
-      data-setup-view="${escapeHtml(step.target_view)}"
-      data-setup-section="${escapeHtml(step.target_section || "")}">
-      <i aria-hidden="true"></i>
-      <span><strong>${escapeHtml(step.label)}</strong><small>${step.status === "ready" ? "已完成" : step.status === "waiting" ? "等待验证" : "待配置"}</small></span>
-      ${step.help ? `<span class="help-icon" tabindex="0" aria-label="${escapeHtml(step.help)}" data-tooltip="${escapeHtml(step.help)}">?</span>` : "<b>→</b>"}
-    </button>
+  if (!state.jellyfinSettings || !state.serverSettings || !Object.keys(state.providerSettings).length) return;
+  initializeSetupWizard();
+  const wizard = state.setupWizard;
+  const pages = ["欢迎", "Jellyfin", "字幕来源", "MoviePilot", "完成"];
+  const titles = ["欢迎使用拾幕", "连接 Jellyfin", "选择字幕来源", "连接 MoviePilot", "配置完成"];
+  const descriptions = [
+    "几步完成必要配置，其余选项以后再调整。",
+    "用于读取媒体库、海报、入库信息和字幕状态。",
+    "只选择需要的来源；高级参数以后仍可在设置中调整。",
+    "使用同一个 Token 保护 MoviePilot 插件回调。",
+    "拾幕已经可以开始工作。",
+  ];
+  $("#setup-title").textContent = titles[wizard.page];
+  $("#setup-description").textContent = descriptions[wizard.page];
+  $("#setup-wizard-progress").innerHTML = pages.map((label, index) => `
+    <li class="${index < wizard.page ? "done" : index === wizard.page ? "current" : ""}">${escapeHtml(label)}</li>
   `).join("");
-  $$("[data-setup-view]", $("#setup-dialog-steps")).forEach((button) => button.addEventListener("click", (event) => {
-    if (event.target.closest(".help-icon")) return;
-    closeSetupDialog();
-    goToSetupTarget(button.dataset.setupView, button.dataset.setupSection);
-  }));
+  $("#setup-dialog-body").innerHTML = setupWizardPageHtml(wizard.page, wizard.draft);
+  $("#setup-back").hidden = wizard.page === 0 || wizard.page === pages.length - 1;
+  $("#setup-continue").textContent = wizard.page === 0 ? "开始设置" : wizard.page === pages.length - 1 ? "完成" : "下一步";
+  $("#setup-continue").disabled = wizard.busy;
+  $("#setup-back").disabled = wizard.busy;
+  $("#setup-skip").disabled = wizard.busy;
 }
 
 function maybeOpenSetupDialog() {
   const setup = state.diagnostics?.setup;
-  if (!setup || setup.completed || window.localStorage.getItem("subpick-setup-dismissed-v1")) return;
+  if (!setup || setup.completed || window.localStorage.getItem("subpick-setup-dismissed-v2")) return;
   $("#setup-dialog").hidden = false;
+  renderSetupDialog();
 }
 
 function closeSetupDialog() {
   $("#setup-dialog").hidden = true;
+}
+
+function randomToken() {
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function initializeSetupWizard() {
+  const wizard = state.setupWizard;
+  if (wizard.initialized) return;
+  const subliminal = state.providerSettings.subliminal || {};
+  const opensubtitles = subliminal.authentication?.opensubtitles || {};
+  const opensubtitlescom = subliminal.authentication?.opensubtitlescom || {};
+  const savedPage = Number(window.localStorage.getItem("subpick-setup-page-v2"));
+  wizard.page = Number.isInteger(savedPage) && savedPage >= 0 && savedPage <= 4 ? savedPage : 0;
+  wizard.draft = {
+    jellyfinUrl: state.jellyfinSettings.server_url || "",
+    jellyfinKey: "",
+    zimukuEnabled: state.providerSettings.zimuku?.enabled ?? true,
+    subliminalEnabled: Boolean(subliminal.enabled),
+    opensubtitlesEnabled: !subliminal.enabled || (subliminal.providers || []).includes("opensubtitles"),
+    opensubtitlesUsername: opensubtitles.username || "",
+    opensubtitlesPassword: "",
+    opensubtitlesPasswordConfigured: Boolean(opensubtitles.password_configured),
+    opensubtitlescomEnabled: Boolean(subliminal.enabled && (subliminal.providers || []).includes("opensubtitlescom")),
+    opensubtitlescomUsername: opensubtitlescom.username || "",
+    opensubtitlescomPassword: "",
+    opensubtitlescomApiKey: "",
+    opensubtitlescomPasswordConfigured: Boolean(opensubtitlescom.password_configured),
+    opensubtitlescomApiKeyConfigured: Boolean(opensubtitlescom.apikey_configured),
+    assrtEnabled: Boolean(state.providerSettings.assrt?.enabled),
+    assrtToken: "",
+    assrtTokenConfigured: Boolean(state.providerSettings.assrt?.token_configured),
+    subdlEnabled: Boolean(state.providerSettings.subdl?.enabled),
+    subdlApiKey: "",
+    subdlApiKeyConfigured: Boolean(state.providerSettings.subdl?.api_key_configured),
+    moviepilotToken: state.serverSettings.token || randomToken(),
+  };
+  wizard.initialized = true;
+}
+
+function setupSecretHint(configured, required = false) {
+  return configured
+    ? '<span class="setup-secret-note">已配置，留空保留现有值</span>'
+    : `<span class="setup-secret-note">${required ? "必填" : "可选"}</span>`;
+}
+
+function setupWizardPageHtml(page, draft) {
+  if (page === 0) return `
+    <h3>让每一部影片，都有合适的字幕</h3>
+    <p>向导只收集运行所需的信息。请求超时、频率限制等高级参数会使用稳妥的默认值。</p>
+    <div class="setup-intro">
+      <article><strong>读取媒体库</strong><small>连接 Jellyfin，自动识别现有外挂与内嵌字幕。</small></article>
+      <article><strong>选择字幕来源</strong><small>Zimuku 默认启用，其他来源由你决定。</small></article>
+      <article><strong>接收 MoviePilot</strong><small>生成通信 Token，等待首次成功回调后确认连接。</small></article>
+    </div>`;
+  if (page === 1) return `
+    <form class="setup-form" onsubmit="return false">
+      <label>Jellyfin 地址<input id="setup-jellyfin-url" type="url" value="${escapeHtml(draft.jellyfinUrl)}" placeholder="http://jellyfin:8096"></label>
+      <label>API Key<input id="setup-jellyfin-key" type="password" autocomplete="new-password" placeholder="${state.jellyfinSettings.api_key_configured ? "已配置，留空保留现有值" : "请输入 Jellyfin API Key"}"></label>
+      <p>连接成功后，首次配置会自动扫描一次全部媒体库。无需填写 User ID。</p>
+    </form>`;
+  if (page === 2) return setupProvidersPageHtml(draft);
+  if (page === 3) return `
+    <form class="setup-form" onsubmit="return false">
+      <label>MoviePilot API Token
+        <span class="field-with-action"><input id="setup-moviepilot-token" type="text" value="${escapeHtml(draft.moviepilotToken)}" autocomplete="off" spellcheck="false"><button id="setup-token-generate" type="button">重新生成</button></span>
+      </label>
+      <p>将这个 Token 填入 MoviePilot 的 ChineseSubFinder 插件。服务地址使用 <code>${escapeHtml(window.location.origin)}</code>。首次成功回调后，运行概览会显示“已连接”。</p>
+    </form>`;
+  const enabledProviders = [
+    draft.zimukuEnabled && "Zimuku",
+    draft.subliminalEnabled && "Subliminal",
+    draft.assrtEnabled && "ASSRT",
+    draft.subdlEnabled && "SubDL",
+  ].filter(Boolean).join("、");
+  return `
+    <h3>基础配置已经保存</h3>
+    <p>未完成的连接验证仍会显示在运行概览中，之后可以随时从设置页继续。</p>
+    <div class="setup-summary">
+      <div><strong>Jellyfin</strong><small>已连接并完成首次扫描</small></div>
+      <div><strong>字幕来源</strong><small>${escapeHtml(enabledProviders || "未启用")}</small></div>
+      <div><strong>MoviePilot</strong><small>${state.diagnostics?.moviepilot?.connected ? "已连接" : "等待首次成功回调"}</small></div>
+    </div>`;
+}
+
+function setupProvidersPageHtml(draft) {
+  return `
+    <div class="setup-provider-list">
+      <section class="setup-provider">
+        <label><input id="setup-zimuku-enabled" type="checkbox" ${checked(draft.zimukuEnabled)}>Zimuku（推荐）</label>
+        <small>无需账号，使用 Compose 内置的验证码识别服务。</small>
+      </section>
+      <section class="setup-provider">
+        <label><input id="setup-subliminal-enabled" type="checkbox" ${checked(draft.subliminalEnabled)}>Subliminal</label>
+        <small>通用字幕来源。OpenSubtitles 可匿名使用，但额度较低。</small>
+        ${draft.subliminalEnabled ? `<div class="setup-provider-fields">
+          <div class="option-row">
+            <label><input id="setup-opensubtitles-enabled" type="checkbox" ${checked(draft.opensubtitlesEnabled)}>OpenSubtitles</label>
+            <label><input id="setup-opensubtitlescom-enabled" type="checkbox" ${checked(draft.opensubtitlescomEnabled)}>OpenSubtitles.com</label>
+          </div>
+          ${draft.opensubtitlesEnabled ? `
+            <label>OpenSubtitles 用户名（建议填写）<input id="setup-opensubtitles-username" value="${escapeHtml(draft.opensubtitlesUsername)}" autocomplete="off"></label>
+            <label>OpenSubtitles 密码<input id="setup-opensubtitles-password" type="password" value="${escapeHtml(draft.opensubtitlesPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlesPasswordConfigured)}</label>` : ""}
+          ${draft.opensubtitlescomEnabled ? `
+            <p><a href="https://www.opensubtitles.com/en/users/sign_up" target="_blank" rel="noreferrer">注册 OpenSubtitles.com</a>，并在 <a href="https://www.opensubtitles.com/en/consumers" target="_blank" rel="noreferrer">API Consumers</a> 获取 API Key。该来源必须完成认证。</p>
+            <label>OpenSubtitles.com 用户名<input id="setup-opensubtitlescom-username" value="${escapeHtml(draft.opensubtitlescomUsername)}" autocomplete="off"></label>
+            <label>OpenSubtitles.com 密码<input id="setup-opensubtitlescom-password" type="password" value="${escapeHtml(draft.opensubtitlescomPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomPasswordConfigured, true)}</label>
+            <label>OpenSubtitles.com API Key<input id="setup-opensubtitlescom-apikey" type="password" value="${escapeHtml(draft.opensubtitlescomApiKey)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomApiKeyConfigured, true)}</label>` : ""}
+        </div>` : ""}
+      </section>
+      <section class="setup-provider">
+        <label><input id="setup-assrt-enabled" type="checkbox" ${checked(draft.assrtEnabled)}>ASSRT</label>
+        <small>中文资源丰富。<a href="https://assrt.net/user/register.xml" target="_blank" rel="noreferrer">注册</a>后在<a href="https://secure.assrt.net/usercp.php" target="_blank" rel="noreferrer">用户面板</a>获取 API Key。</small>
+        ${draft.assrtEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-assrt-token" type="password" value="${escapeHtml(draft.assrtToken)}" autocomplete="new-password">${setupSecretHint(draft.assrtTokenConfigured, true)}</label></div>` : ""}
+      </section>
+      <section class="setup-provider">
+        <label><input id="setup-subdl-enabled" type="checkbox" ${checked(draft.subdlEnabled)}>SubDL</label>
+        <small>支持 IMDb/TMDb 检索。<a href="https://subdl.com/register" target="_blank" rel="noreferrer">注册</a>后在<a href="https://subdl.com/panel/api" target="_blank" rel="noreferrer">API 面板</a>获取 API Key。</small>
+        ${draft.subdlEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-subdl-key" type="password" value="${escapeHtml(draft.subdlApiKey)}" autocomplete="new-password">${setupSecretHint(draft.subdlApiKeyConfigured, true)}</label></div>` : ""}
+      </section>
+    </div>`;
+}
+
+function collectSetupWizardPage() {
+  const { page, draft } = state.setupWizard;
+  if (page === 1) {
+    draft.jellyfinUrl = $("#setup-jellyfin-url")?.value.trim() || "";
+    draft.jellyfinKey = $("#setup-jellyfin-key")?.value.trim() || draft.jellyfinKey;
+  } else if (page === 2) {
+    draft.zimukuEnabled = $("#setup-zimuku-enabled")?.checked === true;
+    draft.subliminalEnabled = $("#setup-subliminal-enabled")?.checked === true;
+    draft.opensubtitlesEnabled = $("#setup-opensubtitles-enabled")?.checked ?? draft.opensubtitlesEnabled;
+    draft.opensubtitlescomEnabled = $("#setup-opensubtitlescom-enabled")?.checked ?? draft.opensubtitlescomEnabled;
+    draft.opensubtitlesUsername = $("#setup-opensubtitles-username")?.value.trim() ?? draft.opensubtitlesUsername;
+    draft.opensubtitlesPassword = $("#setup-opensubtitles-password")?.value || draft.opensubtitlesPassword;
+    draft.opensubtitlescomUsername = $("#setup-opensubtitlescom-username")?.value.trim() ?? draft.opensubtitlescomUsername;
+    draft.opensubtitlescomPassword = $("#setup-opensubtitlescom-password")?.value || draft.opensubtitlescomPassword;
+    draft.opensubtitlescomApiKey = $("#setup-opensubtitlescom-apikey")?.value || draft.opensubtitlescomApiKey;
+    draft.assrtEnabled = $("#setup-assrt-enabled")?.checked === true;
+    draft.assrtToken = $("#setup-assrt-token")?.value || draft.assrtToken;
+    draft.subdlEnabled = $("#setup-subdl-enabled")?.checked === true;
+    draft.subdlApiKey = $("#setup-subdl-key")?.value || draft.subdlApiKey;
+  } else if (page === 3) {
+    draft.moviepilotToken = $("#setup-moviepilot-token")?.value.trim() || draft.moviepilotToken;
+  }
+}
+
+function setSetupStatus(message = "", type = "") {
+  const node = $("#setup-dialog-status");
+  node.className = `setup-dialog-status ${type}`.trim();
+  node.textContent = message;
+}
+
+async function scanAllJellyfinLibraries() {
+  const { payload } = await api("/api/v1/jellyfin/libraries");
+  const libraries = payload.libraries || [];
+  for (let index = 0; index < libraries.length; index += 1) {
+    setSetupStatus(`正在扫描媒体库 ${index + 1}/${libraries.length}：${libraries[index].name}`);
+    await api(`/api/v1/jellyfin/libraries/${encodeURIComponent(libraries[index].id)}/scan`, { method: "POST" });
+  }
+}
+
+async function saveSetupJellyfin() {
+  const draft = state.setupWizard.draft;
+  if (!draft.jellyfinUrl) throw new Error("请填写 Jellyfin 地址");
+  if (!draft.jellyfinKey && !state.jellyfinSettings.api_key_configured) throw new Error("请填写 Jellyfin API Key");
+  const wasConfigured = Boolean(state.jellyfinSettings.configured);
+  const body = { server_url: draft.jellyfinUrl };
+  if (draft.jellyfinKey) body.api_key = draft.jellyfinKey;
+  setSetupStatus("正在保存并测试 Jellyfin 连接…");
+  const { payload: settings } = await api("/api/v1/jellyfin/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  await api("/api/v1/jellyfin/check", { method: "POST" });
+  state.jellyfinSettings = settings;
+  draft.jellyfinKey = "";
+  if (!wasConfigured) await scanAllJellyfinLibraries();
+}
+
+async function saveSetupProviders() {
+  const draft = state.setupWizard.draft;
+  if (![draft.zimukuEnabled, draft.subliminalEnabled, draft.assrtEnabled, draft.subdlEnabled].some(Boolean)) throw new Error("请至少启用一个字幕来源");
+  if (draft.subliminalEnabled && !draft.opensubtitlesEnabled && !draft.opensubtitlescomEnabled) throw new Error("启用 Subliminal 时至少选择一个字幕源");
+  if (draft.opensubtitlescomEnabled && draft.subliminalEnabled) {
+    const complete = draft.opensubtitlescomUsername
+      && (draft.opensubtitlescomPassword || draft.opensubtitlescomPasswordConfigured)
+      && (draft.opensubtitlescomApiKey || draft.opensubtitlescomApiKeyConfigured);
+    if (!complete) throw new Error("OpenSubtitles.com 必须填写用户名、密码和 API Key");
+  }
+  if (draft.assrtEnabled && !draft.assrtToken && !draft.assrtTokenConfigured) throw new Error("启用 ASSRT 前请填写 API Key");
+  if (draft.subdlEnabled && !draft.subdlApiKey && !draft.subdlApiKeyConfigured) throw new Error("启用 SubDL 前请填写 API Key");
+
+  const currentZimuku = state.providerSettings.zimuku || {};
+  setSetupStatus("正在保存并检查 Zimuku…");
+  const { payload: zimuku } = await api("/api/v1/providers/zimuku/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      enabled: draft.zimukuEnabled,
+      moviepilot_ocr_url: currentZimuku.moviepilot_ocr_url || "http://moviepilot-ocr:9899",
+      captcha_debug_capture: Boolean(currentZimuku.captcha_debug_capture),
+      base_url: currentZimuku.base_url || "https://srtku.com",
+      timeout_seconds: currentZimuku.timeout_seconds || 30,
+      request_delay_seconds: currentZimuku.request_delay_seconds ?? 1,
+    }),
+  });
+  state.providerSettings.zimuku = zimuku;
+  if (draft.zimukuEnabled) await api("/api/v1/providers/zimuku/ocr-check", { method: "POST" });
+
+  const authentication = {
+    opensubtitles: { username: draft.opensubtitlesUsername },
+    opensubtitlescom: { username: draft.opensubtitlescomUsername },
+  };
+  if (draft.opensubtitlesPassword) authentication.opensubtitles.password = draft.opensubtitlesPassword;
+  if (draft.opensubtitlescomPassword) authentication.opensubtitlescom.password = draft.opensubtitlescomPassword;
+  if (draft.opensubtitlescomApiKey) authentication.opensubtitlescom.apikey = draft.opensubtitlescomApiKey;
+  setSetupStatus("正在保存 Subliminal…");
+  const { payload: subliminal } = await api("/api/v1/providers/subliminal/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      enabled: draft.subliminalEnabled,
+      providers: [draft.opensubtitlesEnabled && "opensubtitles", draft.opensubtitlescomEnabled && "opensubtitlescom"].filter(Boolean),
+      languages: ["zh-cn", "zh-hant"],
+      authentication,
+    }),
+  });
+  state.providerSettings.subliminal = subliminal;
+
+  setSetupStatus(draft.assrtEnabled ? "正在验证 ASSRT API Key…" : "正在保存 ASSRT…");
+  const assrtBody = { enabled: draft.assrtEnabled, timeout_seconds: 15, requests_per_minute: 5 };
+  if (draft.assrtToken) assrtBody.token = draft.assrtToken;
+  const { payload: assrt } = await api("/api/v1/providers/assrt/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(assrtBody),
+  });
+  state.providerSettings.assrt = assrt;
+  draft.assrtToken = "";
+  draft.assrtTokenConfigured = assrt.token_configured;
+
+  setSetupStatus(draft.subdlEnabled ? "正在验证 SubDL API Key…" : "正在保存 SubDL…");
+  const subdlBody = { enabled: draft.subdlEnabled, timeout_seconds: 15, requests_per_minute: 20, use_api_key_for_downloads: false };
+  if (draft.subdlApiKey) subdlBody.api_key = draft.subdlApiKey;
+  const { payload: subdl } = await api("/api/v1/providers/subdl/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subdlBody),
+  });
+  state.providerSettings.subdl = subdl;
+  draft.subdlApiKey = "";
+  draft.subdlApiKeyConfigured = subdl.api_key_configured;
+}
+
+async function saveSetupMoviePilot() {
+  const token = state.setupWizard.draft.moviepilotToken.trim();
+  if (!token) throw new Error("请生成 MoviePilot API Token");
+  setSetupStatus("正在保存 MoviePilot 通信 Token…");
+  const { payload } = await api("/api/v1/server/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+  });
+  state.serverSettings = payload;
+}
+
+async function continueSetupWizard() {
+  const wizard = state.setupWizard;
+  if (wizard.busy) return;
+  collectSetupWizardPage();
+  if (wizard.page === 4) {
+    window.localStorage.setItem("subpick-setup-dismissed-v2", "1");
+    window.localStorage.removeItem("subpick-setup-page-v2");
+    closeSetupDialog();
+    return;
+  }
+  wizard.busy = true;
+  setSetupStatus("");
+  renderSetupDialog();
+  try {
+    if (wizard.page === 1) await saveSetupJellyfin();
+    if (wizard.page === 2) await saveSetupProviders();
+    if (wizard.page === 3) await saveSetupMoviePilot();
+    wizard.page += 1;
+    window.localStorage.setItem("subpick-setup-page-v2", String(wizard.page));
+    await loadDiagnostics();
+    setSetupStatus("");
+  } catch (error) {
+    setSetupStatus(error.message, "error");
+  } finally {
+    wizard.busy = false;
+    renderSetupDialog();
+  }
+}
+
+function backSetupWizard() {
+  if (state.setupWizard.busy || state.setupWizard.page <= 0) return;
+  collectSetupWizardPage();
+  state.setupWizard.page -= 1;
+  window.localStorage.setItem("subpick-setup-page-v2", String(state.setupWizard.page));
+  setSetupStatus("");
+  renderSetupDialog();
 }
 
 function goToSetupTarget(view, section = "") {
@@ -1237,6 +1542,7 @@ async function loadSettings() {
     $("#server-token").value = server.token || "";
     renderPathSettings();
     renderProviderOrder();
+    renderSetupDialog();
   } catch (error) { showToast(error.message, true); }
 }
 
@@ -1607,9 +1913,7 @@ async function saveGitHub(event) {
 }
 
 function generateServerToken() {
-  const bytes = new Uint8Array(32);
-  window.crypto.getRandomValues(bytes);
-  $("#server-token").value = [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+  $("#server-token").value = randomToken();
   $("#server-token").focus();
 }
 
@@ -1989,13 +2293,22 @@ function bindEvents() {
     if (!$("#path-mapping-rows").children.length) addPathMapping();
   });
   $("#setup-skip").addEventListener("click", () => {
-    window.localStorage.setItem("subpick-setup-dismissed-v1", "1");
+    collectSetupWizardPage();
+    window.localStorage.setItem("subpick-setup-dismissed-v2", "1");
     closeSetupDialog();
   });
-  $("#setup-continue").addEventListener("click", () => {
-    const step = (state.diagnostics?.setup?.steps || []).find((item) => item.status !== "ready");
-    closeSetupDialog();
-    if (step) goToSetupTarget(step.target_view, step.target_section);
+  $("#setup-back").addEventListener("click", backSetupWizard);
+  $("#setup-continue").addEventListener("click", continueSetupWizard);
+  $("#setup-dialog-body").addEventListener("change", (event) => {
+    if (!event.target.matches("#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-opensubtitles-enabled, #setup-opensubtitlescom-enabled, #setup-assrt-enabled, #setup-subdl-enabled")) return;
+    collectSetupWizardPage();
+    renderSetupDialog();
+  });
+  $("#setup-dialog-body").addEventListener("click", (event) => {
+    if (!event.target.closest("#setup-token-generate")) return;
+    state.setupWizard.draft.moviepilotToken = randomToken();
+    renderSetupDialog();
+    $("#setup-moviepilot-token")?.focus();
   });
   bindProviderOrderEvents();
   $("#provider-order-save").addEventListener("click", saveProviderOrder);

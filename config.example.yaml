@@ -49,7 +49,7 @@ providers:
     # ASSRT's effective quota is five API requests per minute.
     requests_per_minute: 5
   zimuku:
-    enabled: false
+    enabled: true
     base_url: "https://srtku.com"
     # The bundled Compose service provides this MoviePilot-OCR-compatible endpoint.
     moviepilot_ocr_url: "http://moviepilot-ocr:9899"
@@ -60,7 +60,7 @@ providers:
     timeout_seconds: 30
     request_delay_seconds: 1
   subliminal:
-    enabled: true
+    enabled: false
     providers:
       - opensubtitles
       - opensubtitlescom

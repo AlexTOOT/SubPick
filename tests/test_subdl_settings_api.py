@@ -59,3 +59,24 @@ def test_subdl_settings_persist_without_returning_key_and_usage_is_available(tmp
     assert diagnostics.json()["providers"]["subdl"]["status"] == "ok"
     assert diagnostics.json()["providers"]["subdl"]["last_checked_at"]
     assert "subdl-test-secret" not in f"{loaded.json()}{diagnostics.json()}"
+
+
+def test_subdl_enabled_settings_require_a_working_key(tmp_path: Path) -> None:
+    class BrokenSubdlProvider(FakeSubdlProvider):
+        def usage(self):
+            raise RuntimeError("invalid key")
+
+    app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
+    app.state.subdl_provider_factory = BrokenSubdlProvider
+    with TestClient(app) as client:
+        missing = client.put("/api/v1/providers/subdl/settings", json={"enabled": True})
+        invalid = client.put(
+            "/api/v1/providers/subdl/settings",
+            json={"enabled": True, "api_key": "invalid"},
+        )
+        loaded = client.get("/api/v1/providers/subdl/settings")
+
+    assert missing.status_code == 422
+    assert invalid.status_code == 502
+    assert loaded.json()["enabled"] is False
+    assert loaded.json()["api_key_configured"] is False

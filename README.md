@@ -49,8 +49,6 @@ services:
       - /volume1/media:/media
     environment:
       TZ: Asia/Shanghai
-    depends_on:
-      - moviepilot-ocr
     restart: unless-stopped
 
   moviepilot-ocr:
