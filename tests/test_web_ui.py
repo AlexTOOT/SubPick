@@ -63,6 +63,7 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "/api/v1/diagnostics/health-runs" in js
     assert "/api/v1/github/settings" in js
     assert "/api/v1/server/settings" in js
+    assert "/api/v1/setup/wizard" in js
     assert "/api/v1/paths/settings" in js
     assert "/api/v1/paths/check" in js
     assert "/api/v1/providers/order" in js
@@ -119,6 +120,14 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "validation-shake" in css
     assert "setup-page-forward" in css
     assert "window.location.origin" in js
+    assert 'id="setup-subdl-pro"' in js
+    assert "use_api_key_for_downloads: draft.subdlPro" in js
+    assert "startInitialJellyfinScan" in js
+    assert "if (!wasConfigured) startInitialJellyfinScan();" in js
+    assert "data-setup-page" in js
+    assert "wizard.page = Math.min(restoredPage, wizard.maxPage);" in js
+    assert "subpick-setup-dismissed-v2" not in js
+    assert "setup-provider-expand" in css
     assert '.provider-config-card[open] > summary::after { transform: rotate(90deg); }' in css
 
 

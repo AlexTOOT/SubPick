@@ -372,6 +372,29 @@ def test_server_token_settings_are_plaintext_and_persist_across_restart(tmp_path
     assert unprotected.status_code == 200
 
 
+def test_setup_wizard_dismissal_persists_across_restart(tmp_path):
+    data_dir = tmp_path / "data"
+    app = create_app(data_dir=data_dir, job_processor=lambda task_id: None)
+
+    with TestClient(app) as client:
+        before = client.get("/api/v1/diagnostics")
+        dismissed = client.put("/api/v1/setup/wizard", json={"dismissed": True})
+        after = client.get("/api/v1/diagnostics")
+
+    assert before.status_code == 200
+    assert before.json()["setup"]["dismissed"] is False
+    assert dismissed.json() == {"dismissed": True}
+    assert after.json()["setup"]["dismissed"] is True
+
+    restarted = create_app(data_dir=data_dir, job_processor=lambda task_id: None)
+    with TestClient(restarted) as client:
+        persisted = client.get("/api/v1/diagnostics")
+        restored = client.put("/api/v1/setup/wizard", json={"dismissed": False})
+
+    assert persisted.json()["setup"]["dismissed"] is True
+    assert restored.json() == {"dismissed": False}
+
+
 def test_moviepilot_connection_is_verified_by_first_authenticated_callback(tmp_path):
     media_file = tmp_path / "Movie.mkv"
     media_file.write_bytes(b"video")

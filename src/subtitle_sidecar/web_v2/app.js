@@ -43,7 +43,16 @@ const state = {
   dependencyUpdates: null,
   healthChecks: [],
   healthRunning: false,
-  setupWizard: { initialized: false, page: 0, busy: false, direction: "none", forceOpen: false, draft: {} },
+  setupWizard: {
+    initialized: false,
+    page: 0,
+    maxPage: 0,
+    completedThrough: -1,
+    busy: false,
+    direction: "none",
+    forceOpen: false,
+    draft: {},
+  },
   toastTimer: null,
 };
 
@@ -312,9 +321,13 @@ function renderSetupDialog() {
   ];
   $("#setup-title").textContent = titles[wizard.page];
   $("#setup-description").textContent = descriptions[wizard.page];
-  $("#setup-wizard-progress").innerHTML = pages.map((label, index) => `
-    <li class="${index < wizard.page ? "done" : index === wizard.page ? "current" : ""}">${escapeHtml(label)}</li>
-  `).join("");
+  $("#setup-wizard-progress").innerHTML = pages.map((label, index) => {
+    const className = index === wizard.page ? "current" : index <= wizard.completedThrough ? "done" : "";
+    const content = index <= wizard.maxPage
+      ? `<button type="button" data-setup-page="${index}" ${index === wizard.page ? "disabled" : ""}>${escapeHtml(label)}</button>`
+      : `<span>${escapeHtml(label)}</span>`;
+    return `<li class="${className}">${content}</li>`;
+  }).join("");
   const direction = wizard.direction === "backward" ? "backward" : wizard.direction === "forward" ? "forward" : "none";
   $("#setup-dialog-body").innerHTML = `<div class="setup-page setup-page-${direction}">${setupWizardPageHtml(wizard.page, wizard.draft)}</div>`;
   wizard.direction = "none";
@@ -327,7 +340,7 @@ function renderSetupDialog() {
 
 function maybeOpenSetupDialog() {
   const setup = state.diagnostics?.setup;
-  if (!setup || setup.completed || window.localStorage.getItem("subpick-setup-dismissed-v2")) return;
+  if (!setup || setup.completed || setup.dismissed) return;
   $("#setup-dialog").hidden = false;
   renderSetupDialog();
 }
@@ -335,7 +348,6 @@ function maybeOpenSetupDialog() {
 function openSetupDialog() {
   const setup = state.diagnostics?.setup;
   if (!setup) return;
-  window.localStorage.removeItem("subpick-setup-dismissed-v2");
   state.setupWizard.forceOpen = true;
   if (setup.completed) {
     state.setupWizard.initialized = false;
@@ -364,7 +376,17 @@ function initializeSetupWizard() {
   const opensubtitles = subliminal.authentication?.opensubtitles || {};
   const opensubtitlescom = subliminal.authentication?.opensubtitlescom || {};
   const savedPage = Number(window.localStorage.getItem("subpick-setup-page-v2"));
-  wizard.page = Number.isInteger(savedPage) && savedPage >= 0 && savedPage <= 4 ? savedPage : 0;
+  const restoredPage = Number.isInteger(savedPage) && savedPage >= 0 && savedPage <= 4 ? savedPage : 0;
+  const providerReady = Object.values(state.diagnostics?.providers || {})
+    .some((provider) => provider.enabled && provider.status === "ok");
+  let completedThrough = -1;
+  if (state.diagnostics?.jellyfin?.connected) completedThrough = 1;
+  if (completedThrough >= 1 && providerReady) completedThrough = 2;
+  if (completedThrough >= 2 && state.serverSettings.token) completedThrough = 3;
+  if (state.diagnostics?.setup?.completed) completedThrough = 4;
+  wizard.completedThrough = completedThrough;
+  wizard.maxPage = Math.min(4, completedThrough + 1);
+  wizard.page = Math.min(restoredPage, wizard.maxPage);
   wizard.draft = {
     jellyfinUrl: state.jellyfinSettings.server_url || "",
     jellyfinKey: "",
@@ -386,6 +408,7 @@ function initializeSetupWizard() {
     subdlEnabled: Boolean(state.providerSettings.subdl?.enabled),
     subdlApiKey: "",
     subdlApiKeyConfigured: Boolean(state.providerSettings.subdl?.api_key_configured),
+    subdlPro: Boolean(state.providerSettings.subdl?.use_api_key_for_downloads),
     moviepilotToken: state.serverSettings.token || randomToken(),
   };
   wizard.initialized = true;
@@ -410,7 +433,7 @@ function setupWizardPageHtml(page, draft) {
     <form class="setup-form" onsubmit="return false">
       <label>Jellyfin 地址<input id="setup-jellyfin-url" type="url" value="${escapeHtml(draft.jellyfinUrl)}" placeholder="http://jellyfin:8096"></label>
       <label>API Key<input id="setup-jellyfin-key" type="password" autocomplete="new-password" placeholder="${state.jellyfinSettings.api_key_configured ? "已配置，留空保留现有值" : "请输入 Jellyfin API Key"}"></label>
-      <p>连接成功后，首次配置会自动扫描一次全部媒体库。无需填写 User ID。</p>
+      <p>连接成功后即可继续；首次媒体库扫描会在后台进行。无需填写 User ID。</p>
     </form>`;
   if (page === 2) return setupProvidersPageHtml(draft);
   if (page === 3) return `
@@ -430,7 +453,7 @@ function setupWizardPageHtml(page, draft) {
     <h3>基础配置已经保存</h3>
     <p>未完成的连接验证仍会显示在运行概览中，之后可以随时从设置页继续。</p>
     <div class="setup-summary">
-      <div><strong>Jellyfin</strong><small>已连接并完成首次扫描</small></div>
+      <div><strong>Jellyfin</strong><small>已连接，媒体库扫描在后台进行</small></div>
       <div><strong>字幕来源</strong><small>${escapeHtml(enabledProviders || "未启用")}</small></div>
       <div><strong>MoviePilot</strong><small>${state.diagnostics?.moviepilot?.connected ? "已连接" : "等待首次成功回调"}</small></div>
     </div>`;
@@ -469,7 +492,10 @@ function setupProvidersPageHtml(draft) {
       <section class="setup-provider" data-setup-provider="subdl">
         <label><input id="setup-subdl-enabled" type="checkbox" ${checked(draft.subdlEnabled)}>SubDL</label>
         <small>支持 IMDb/TMDb 检索。<a href="https://subdl.com/register" target="_blank" rel="noreferrer">注册</a>后在<a href="https://subdl.com/panel/api" target="_blank" rel="noreferrer">API 面板</a>获取 API Key。</small>
-        ${draft.subdlEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-subdl-key" type="password" value="${escapeHtml(draft.subdlApiKey)}" autocomplete="new-password">${setupSecretHint(draft.subdlApiKeyConfigured, true)}</label></div>` : ""}
+        ${draft.subdlEnabled ? `<div class="setup-provider-fields">
+          <label>API Key<input id="setup-subdl-key" type="password" value="${escapeHtml(draft.subdlApiKey)}" autocomplete="new-password">${setupSecretHint(draft.subdlApiKeyConfigured, true)}</label>
+          <label class="toggle-row"><input id="setup-subdl-pro" type="checkbox" ${checked(draft.subdlPro)}>SubDL Pro：下载时携带 API Key</label>
+        </div>` : ""}
       </section>
     </div>`;
 }
@@ -493,6 +519,7 @@ function collectSetupWizardPage() {
     draft.assrtToken = $("#setup-assrt-token")?.value || draft.assrtToken;
     draft.subdlEnabled = $("#setup-subdl-enabled")?.checked === true;
     draft.subdlApiKey = $("#setup-subdl-key")?.value || draft.subdlApiKey;
+    draft.subdlPro = $("#setup-subdl-pro")?.checked ?? draft.subdlPro;
   } else if (page === 3) {
     draft.moviepilotToken = $("#setup-moviepilot-token")?.value.trim() || draft.moviepilotToken;
   }
@@ -508,9 +535,15 @@ async function scanAllJellyfinLibraries() {
   const { payload } = await api("/api/v1/jellyfin/libraries");
   const libraries = payload.libraries || [];
   for (let index = 0; index < libraries.length; index += 1) {
-    setSetupStatus(`正在扫描媒体库 ${index + 1}/${libraries.length}：${libraries[index].name}`);
     await api(`/api/v1/jellyfin/libraries/${encodeURIComponent(libraries[index].id)}/scan`, { method: "POST" });
   }
+  return libraries.length;
+}
+
+function startInitialJellyfinScan() {
+  void scanAllJellyfinLibraries()
+    .then((count) => showToast(`Jellyfin 后台扫描完成：${count} 个媒体库`))
+    .catch((error) => showToast(`Jellyfin 后台扫描失败：${error.message}`, true));
 }
 
 async function saveSetupJellyfin() {
@@ -534,7 +567,7 @@ async function saveSetupJellyfin() {
   }
   state.jellyfinSettings = settings;
   draft.jellyfinKey = "";
-  if (!wasConfigured) await scanAllJellyfinLibraries();
+  if (!wasConfigured) startInitialJellyfinScan();
 }
 
 async function saveSetupProviders() {
@@ -621,7 +654,12 @@ async function saveSetupProviders() {
   draft.assrtTokenConfigured = assrt.token_configured;
 
   setSetupStatus(draft.subdlEnabled ? "正在验证 SubDL API Key…" : "正在保存 SubDL…");
-  const subdlBody = { enabled: draft.subdlEnabled, timeout_seconds: 15, requests_per_minute: 20, use_api_key_for_downloads: false };
+  const subdlBody = {
+    enabled: draft.subdlEnabled,
+    timeout_seconds: 15,
+    requests_per_minute: 20,
+    use_api_key_for_downloads: draft.subdlPro,
+  };
   if (draft.subdlApiKey) subdlBody.api_key = draft.subdlApiKey;
   let subdl;
   try {
@@ -651,9 +689,7 @@ async function continueSetupWizard() {
   if (wizard.busy) return;
   collectSetupWizardPage();
   if (wizard.page === 4) {
-    window.localStorage.setItem("subpick-setup-dismissed-v2", "1");
-    window.localStorage.removeItem("subpick-setup-page-v2");
-    closeSetupDialog();
+    await dismissSetupWizard();
     return;
   }
   wizard.busy = true;
@@ -664,7 +700,9 @@ async function continueSetupWizard() {
     if (wizard.page === 1) await saveSetupJellyfin();
     if (wizard.page === 2) await saveSetupProviders();
     if (wizard.page === 3) await saveSetupMoviePilot();
+    wizard.completedThrough = Math.max(wizard.completedThrough, wizard.page);
     wizard.page += 1;
+    wizard.maxPage = Math.max(wizard.maxPage, wizard.page);
     window.localStorage.setItem("subpick-setup-page-v2", String(wizard.page));
     await loadDiagnostics();
     wizard.direction = "forward";
@@ -682,6 +720,29 @@ async function continueSetupWizard() {
   }
 }
 
+async function dismissSetupWizard() {
+  const wizard = state.setupWizard;
+  if (wizard.busy) return;
+  wizard.busy = true;
+  renderSetupDialog();
+  try {
+    await api("/api/v1/setup/wizard", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dismissed: true }),
+    });
+    if (state.diagnostics?.setup) state.diagnostics.setup.dismissed = true;
+    window.localStorage.removeItem("subpick-setup-page-v2");
+    closeSetupDialog();
+  } catch (error) {
+    setSetupStatus(error.message, "error");
+    showValidationFailure($(".setup-dialog"), [".setup-page"]);
+  } finally {
+    wizard.busy = false;
+    if (!$("#setup-dialog").hidden) renderSetupDialog();
+  }
+}
+
 function backSetupWizard() {
   if (state.setupWizard.busy || state.setupWizard.page <= 0) return;
   collectSetupWizardPage();
@@ -690,6 +751,38 @@ function backSetupWizard() {
   window.localStorage.setItem("subpick-setup-page-v2", String(state.setupWizard.page));
   setSetupStatus("");
   renderSetupDialog();
+}
+
+function navigateSetupWizardPage(targetPage) {
+  const wizard = state.setupWizard;
+  if (wizard.busy || targetPage < 0 || targetPage > wizard.maxPage || targetPage === wizard.page) return;
+  collectSetupWizardPage();
+  wizard.direction = targetPage < wizard.page ? "backward" : "forward";
+  wizard.page = targetPage;
+  window.localStorage.setItem("subpick-setup-page-v2", String(wizard.page));
+  setSetupStatus("");
+  renderSetupDialog();
+}
+
+function rerenderSetupProviderChoice(event) {
+  const providerToggle = event.target.matches(
+    "#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-assrt-enabled, #setup-subdl-enabled",
+  );
+  const fields = event.target.closest(".setup-provider")?.querySelector(".setup-provider-fields");
+  collectSetupWizardPage();
+  if (!providerToggle || event.target.checked || !fields || typeof fields.animate !== "function"
+      || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    renderSetupDialog();
+    return;
+  }
+  const animation = fields.animate(
+    [
+      { maxHeight: `${fields.scrollHeight}px`, opacity: 1, transform: "translateY(0)" },
+      { maxHeight: "0", opacity: 0, transform: "translateY(-7px)" },
+    ],
+    { duration: 180, easing: "cubic-bezier(.4,0,.2,1)" },
+  );
+  animation.finished.catch(() => {}).finally(renderSetupDialog);
 }
 
 function goToSetupTarget(view, section = "") {
@@ -2502,17 +2595,20 @@ function bindEvents() {
     remove.closest(".path-mapping-row")?.remove();
     if (!$("#path-mapping-rows").children.length) addPathMapping();
   });
-  $("#setup-skip").addEventListener("click", () => {
+  $("#setup-skip").addEventListener("click", async () => {
     collectSetupWizardPage();
-    window.localStorage.setItem("subpick-setup-dismissed-v2", "1");
-    closeSetupDialog();
+    await dismissSetupWizard();
   });
   $("#setup-back").addEventListener("click", backSetupWizard);
   $("#setup-continue").addEventListener("click", continueSetupWizard);
+  $("#setup-wizard-progress").addEventListener("click", (event) => {
+    const target = event.target.closest("[data-setup-page]");
+    if (!target) return;
+    navigateSetupWizardPage(Number(target.dataset.setupPage));
+  });
   $("#setup-dialog-body").addEventListener("change", (event) => {
     if (!event.target.matches("#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-opensubtitles-enabled, #setup-opensubtitlescom-enabled, #setup-assrt-enabled, #setup-subdl-enabled")) return;
-    collectSetupWizardPage();
-    renderSetupDialog();
+    rerenderSetupProviderChoice(event);
   });
   $("#setup-dialog-body").addEventListener("click", (event) => {
     if (!event.target.closest("#setup-token-generate")) return;

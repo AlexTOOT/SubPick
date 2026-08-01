@@ -643,8 +643,17 @@ class SetupNotificationResponse(BaseModel):
     target_section: str | None = None
 
 
+class SetupWizardStateRequest(BaseModel):
+    dismissed: bool
+
+
+class SetupWizardStateResponse(BaseModel):
+    dismissed: bool
+
+
 class SetupStatusResponse(BaseModel):
     completed: bool
+    dismissed: bool
     steps: list[SetupStepResponse]
     notifications: list[SetupNotificationResponse]
 

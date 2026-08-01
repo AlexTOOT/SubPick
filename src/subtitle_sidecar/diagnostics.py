@@ -304,6 +304,7 @@ def _setup_status(
         )
     return {
         "completed": all(step["status"] == "ready" for step in steps),
+        "dismissed": bool(runtime_metadata.get("setup_wizard_dismissed")),
         "steps": steps,
         "notifications": notifications,
     }

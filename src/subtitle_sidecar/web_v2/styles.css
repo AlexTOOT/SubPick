@@ -759,6 +759,11 @@ tbody tr:hover { background: #f7f9ff; }
 .setup-wizard-progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 18px 0 0; padding: 0; counter-reset: setup-step; list-style: none; }
 .setup-wizard-progress li { position: relative; padding-top: 14px; color: var(--muted); font-size: 11px; font-weight: 700; text-align: center; }
 .setup-wizard-progress li::before { position: absolute; top: 0; right: 0; left: 0; height: 4px; border-radius: 2px; background: #e1e5e2; content: ""; }
+.setup-wizard-progress button,
+.setup-wizard-progress span { display: block; width: 100%; padding: 2px 3px; border: 0; background: transparent; color: inherit; font: inherit; text-align: center; }
+.setup-wizard-progress button { cursor: pointer; }
+.setup-wizard-progress button:hover { color: var(--green); background: #f0f6f3; }
+.setup-wizard-progress button:disabled { cursor: default; opacity: 1; }
 .setup-wizard-progress li.current { color: var(--ink); }
 .setup-wizard-progress li.done::before { background: #63b48d; }
 .setup-wizard-progress li.current::before { background: var(--green); }
@@ -781,7 +786,11 @@ tbody tr:hover { background: #f7f9ff; }
 .setup-provider { padding: 13px 14px; border: 1px solid var(--line); border-radius: 7px; background: #fafbf9; }
 .setup-provider > label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; }
 .setup-provider > small { display: block; margin: 5px 0 0 26px; color: var(--muted); line-height: 1.45; }
-.setup-provider-fields { display: grid; gap: 10px; margin: 13px 0 0 26px; padding-top: 12px; border-top: 1px solid var(--line); }
+.setup-provider-fields { display: grid; gap: 10px; margin: 13px 0 0 26px; padding-top: 12px; overflow: hidden; border-top: 1px solid var(--line); animation: setup-provider-expand 210ms cubic-bezier(.2,.75,.25,1); }
+@keyframes setup-provider-expand {
+  from { max-height: 0; opacity: 0; transform: translateY(-7px); }
+  to { max-height: 820px; opacity: 1; transform: translateY(0); }
+}
 .setup-provider-fields > label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .setup-provider-fields .option-row label { color: var(--ink); }
 .setup-provider a,

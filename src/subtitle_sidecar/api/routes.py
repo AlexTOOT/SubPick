@@ -52,6 +52,8 @@ from subtitle_sidecar.api.schemas import (
     PathSettingsResponse,
     ServerSettingsRequest,
     ServerSettingsResponse,
+    SetupWizardStateRequest,
+    SetupWizardStateResponse,
     RetryTaskResponse,
     DiagnosticsResponse,
     SubtitleArtifactResponse,
@@ -259,6 +261,23 @@ def create_api_router() -> APIRouter:
                 getattr(request.app.state, "provider_scheduler", None),
             )
         )
+
+    @router.put("/setup/wizard", response_model=SetupWizardStateResponse)
+    def save_setup_wizard_state(
+        request: Request,
+        payload: SetupWizardStateRequest,
+    ) -> SetupWizardStateResponse:
+        with session_scope(request.app.state.engine) as session:
+            repo = Repository(session)
+            runtime_metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
+            runtime_metadata["setup_wizard_dismissed"] = payload.dismissed
+            repo.set_setting(RUNTIME_METADATA_SETTING_KEY, runtime_metadata)
+            _record_config_event(
+                repo,
+                "首次设置向导已跳过" if payload.dismissed else "首次设置向导已重新启用",
+                details={"dismissed": payload.dismissed},
+            )
+        return SetupWizardStateResponse(dismissed=payload.dismissed)
 
     @router.post("/diagnostics/health-runs", status_code=204)
     def record_health_run(request: Request, payload: HealthCheckRunRequest) -> Response:
