@@ -21,6 +21,7 @@ from subtitle_sidecar.providers.zimuku_adapter import (
     _parse_lsar_entries,
     _parse_search_results,
     _parse_work_results,
+    _response_filename,
     _search_queries,
 )
 
@@ -232,6 +233,21 @@ def test_work_results_keep_bilingual_rows_and_parse_real_download_column() -> No
         1225,
     ]
     assert candidates[0].confidence > candidates[1].confidence > candidates[2].confidence
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [
+        'attachment; filename="Strange.Harvest.Chs%26amp;Eng.ass"',
+        'attachment; filename="Strange.Harvest.Chs%26amp%3BEng.ass"',
+    ],
+)
+def test_response_filename_keeps_extension_after_encoded_html_entity(disposition: str) -> None:
+    response = SimpleNamespace(headers={"Content-Disposition": disposition})
+
+    assert _response_filename(response, "https://s.zimuku.org/download/token") == (
+        "Strange.Harvest.Chs&Eng.ass"
+    )
 
 
 def test_search_opens_full_work_page_instead_of_using_preview_only() -> None:

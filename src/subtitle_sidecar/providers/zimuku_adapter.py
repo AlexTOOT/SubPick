@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html import unescape as html_unescape
 from io import BytesIO
 from pathlib import Path
 import base64
@@ -1222,10 +1223,15 @@ def _response_filename(response: Any, url: str) -> str:
     disposition = str((getattr(response, "headers", {}) or {}).get("Content-Disposition") or "")
     match = re.search(r"filename\*=UTF-8''([^;]+)", disposition, re.IGNORECASE)
     if match:
-        return _safe_filename(unquote(match.group(1)))
-    match = re.search(r"filename\s*=\s*[\"']?([^\"';]+)", disposition, re.IGNORECASE)
+        return _safe_filename(html_unescape(unquote(match.group(1))))
+    match = re.search(
+        r"filename\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^;]*))",
+        disposition,
+        re.IGNORECASE,
+    )
     if match:
-        return _safe_filename(unquote(match.group(1).strip()))
+        encoded = next((group for group in match.groups() if group is not None), "")
+        return _safe_filename(html_unescape(unquote(encoded.strip())))
     return _safe_filename(unquote(Path(urlparse(url).path).name) or "subtitle.zip")
 
 
