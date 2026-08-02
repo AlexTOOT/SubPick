@@ -7,10 +7,12 @@ import re
 from subtitle_sidecar.media.identity import analyze_release_years
 from subtitle_sidecar.providers.base import SubtitleCandidate
 
-BILINGUAL_BONUS = 100
-SIMPLIFIED_BONUS = 70
-TRADITIONAL_BONUS = 50
+BILINGUAL_BONUS = 6
+SIMPLIFIED_BONUS = 2
+TRADITIONAL_BONUS = 1
 CONFIDENCE_MULTIPLIER = 10
+PROVIDER_QUALITY_MULTIPLIER = 100
+PROVIDER_QUALITY_WINDOW = 0.05
 RELEASE_MATCH_BONUS = 25
 RELEASE_MISMATCH_PENALTY = 12
 EPISODE_MATCH_BONUS = 40
@@ -25,11 +27,19 @@ def score_candidate(
     video_path: Path | None = None,
     season: int | None = None,
     episode: int | None = None,
+    provider_quality_reference: float | None = None,
 ) -> float:
     score = 0.0
     language = _normalize_language(candidate.language)
+    provider_quality = _normalized_provider_quality(candidate.provider_quality)
 
-    if candidate.is_bilingual:
+    if provider_quality is not None:
+        score += provider_quality * PROVIDER_QUALITY_MULTIPLIER
+
+    if candidate.is_bilingual and _quality_is_comparable(
+        provider_quality,
+        provider_quality_reference,
+    ):
         score += BILINGUAL_BONUS
 
     if language == "zh-cn":
@@ -52,10 +62,17 @@ def sort_candidates(
     season: int | None = None,
     episode: int | None = None,
 ) -> list[SubtitleCandidate]:
+    quality_references = _provider_quality_references(candidates)
     return sorted(
         candidates,
         key=lambda candidate: (
-            -score_candidate(candidate, video_path=video_path, season=season, episode=episode),
+            -score_candidate(
+                candidate,
+                video_path=video_path,
+                season=season,
+                episode=episode,
+                provider_quality_reference=quality_references.get(_adapter_name(candidate)),
+            ),
             _normalize_language(candidate.language),
             candidate.provider.casefold(),
             candidate.release_info.casefold(),
@@ -63,6 +80,46 @@ def sort_candidates(
             candidate.source_url,
         ),
     )
+
+
+def provider_quality_reference(
+    candidates: list[SubtitleCandidate],
+    candidate: SubtitleCandidate,
+) -> float | None:
+    """Return the best native quality reported by the candidate's adapter."""
+    return _provider_quality_references(candidates).get(_adapter_name(candidate))
+
+
+def _provider_quality_references(
+    candidates: list[SubtitleCandidate],
+) -> dict[str, float]:
+    references: dict[str, float] = {}
+    for candidate in candidates:
+        quality = _normalized_provider_quality(candidate.provider_quality)
+        if quality is None:
+            continue
+        adapter = _adapter_name(candidate)
+        references[adapter] = max(references.get(adapter, 0.0), quality)
+    return references
+
+
+def _adapter_name(candidate: SubtitleCandidate) -> str:
+    return candidate.provider.split(":", 1)[0].casefold()
+
+
+def _normalized_provider_quality(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return min(max(float(value), 0.0), 1.0)
+
+
+def _quality_is_comparable(
+    quality: float | None,
+    reference: float | None,
+) -> bool:
+    if quality is None or reference is None:
+        return True
+    return quality >= reference - PROVIDER_QUALITY_WINDOW
 
 
 def episode_mismatch_reason(

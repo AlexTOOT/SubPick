@@ -770,6 +770,7 @@ def _parse_candidate_rows(
                 source_url=urljoin(ZIMUKU_PUBLIC_URL, detail_path),
                 release_info=subtitle_title,
                 confidence=confidence,
+                provider_quality=confidence,
                 raw_metadata={
                     "zimuku_detail_path": detail_path,
                     "zimuku_work_title": work_title,

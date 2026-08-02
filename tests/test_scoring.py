@@ -9,7 +9,12 @@ from subtitle_sidecar.pipeline.scoring import (
 from subtitle_sidecar.providers.base import SubtitleCandidate
 
 
-def candidate(language: str, bilingual: bool, release: str = "WEB-DL") -> SubtitleCandidate:
+def candidate(
+    language: str,
+    bilingual: bool,
+    release: str = "WEB-DL",
+    provider_quality: float | None = None,
+) -> SubtitleCandidate:
     return SubtitleCandidate(
         provider="fake",
         language=language,
@@ -19,6 +24,7 @@ def candidate(language: str, bilingual: bool, release: str = "WEB-DL") -> Subtit
         source_url="https://example.invalid",
         release_info=release,
         confidence=0.5,
+        provider_quality=provider_quality,
         raw_metadata={},
     )
 
@@ -29,6 +35,23 @@ def test_bilingual_scores_above_plain_chinese() -> None:
 
 def test_simplified_scores_above_traditional_when_not_bilingual() -> None:
     assert score_candidate(candidate("zh-cn", False)) > score_candidate(candidate("zh-hant", False))
+
+
+def test_provider_quality_beats_low_popularity_bilingual_candidate() -> None:
+    popular_simplified = candidate("zh-cn", False, provider_quality=0.9)
+    obscure_bilingual = candidate("zh-cn", True, provider_quality=0.35)
+
+    assert sort_candidates([obscure_bilingual, popular_simplified]) == [
+        popular_simplified,
+        obscure_bilingual,
+    ]
+
+
+def test_bilingual_is_preferred_when_provider_quality_is_close() -> None:
+    plain = candidate("zh-cn", False, provider_quality=0.82)
+    bilingual = candidate("zh-cn", True, provider_quality=0.80)
+
+    assert sort_candidates([plain, bilingual]) == [bilingual, plain]
 
 
 def test_confidence_affects_score_within_same_language_bucket() -> None:

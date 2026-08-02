@@ -5,6 +5,7 @@ from zipfile import ZipFile
 from subtitle_sidecar.providers.assrt_adapter import (
     AssrtApiError,
     AssrtProvider,
+    _assrt_provider_quality,
     _download_direct_files,
     _parse_7zip_members,
     _supported_direct_files,
@@ -48,7 +49,7 @@ class FakeClient:
                             },
                             {
                                 "id": 101,
-                                "native_name": "Korean only",
+                                "native_name": "另一部电影",
                                 "lang": {"desc": "韩 双语", "langlist": {"langkor": True, "langdou": True}},
                             },
                         ]
@@ -62,6 +63,9 @@ class FakeClient:
                     "sub": {
                         "subs": [
                             {
+                                "down_count": 500,
+                                "view_count": 1000,
+                                "vote_score": 25,
                                 "filelist": [
                                     {"f": "readme.txt", "url": "https://download.invalid/readme"},
                                     {"f": "Test.zh-CN.srt", "url": "https://download.invalid/test.srt"},
@@ -172,6 +176,32 @@ class EmptySearchClient(FakeClient):
         return super().get(url, **kwargs)
 
 
+class LangdouOnlyClient(FakeClient):
+    def get(self, url, **kwargs):
+        if url.endswith("/v1/sub/search"):
+            self.calls.append((url, kwargs))
+            return FakeResponse(
+                {
+                    "status": 0,
+                    "sub": {
+                        "subs": [
+                            {
+                                "id": 111,
+                                "native_name": "测试电影",
+                                "videoname": "Test.Movie.2026.1080p.WEB-DL",
+                                "subtype": "Subrip(srt)",
+                                "lang": {
+                                    "desc": "Korean English",
+                                    "langlist": {"langkor": True, "langdou": True},
+                                },
+                            }
+                        ]
+                    },
+                }
+            )
+        return super().get(url, **kwargs)
+
+
 class ModernAssrtClient(FakeClient):
     def __init__(self) -> None:
         super().__init__()
@@ -254,6 +284,10 @@ def test_assrt_search_download_and_rate_limit(tmp_path: Path) -> None:
     assert candidates[0].provider == "assrt"
     assert candidates[0].is_bilingual is True
     assert candidates[0].raw_metadata["assrt_subtitle_id"] == 100
+    assert candidates[0].raw_metadata["assrt_downloads"] == 500
+    assert candidates[0].raw_metadata["assrt_views"] == 1000
+    assert candidates[0].raw_metadata["assrt_vote_score"] == 25
+    assert candidates[0].provider_quality is not None
     assert downloaded.path.name == "assrt-100-1-Test.zh-CN.srt"
     assert downloaded.path.read_bytes().startswith(b"1\n00:00:01")
     assert [member.filename for member in downloaded.files] == ["Test.zh-CN.srt"]
@@ -287,6 +321,35 @@ def test_assrt_skips_without_token() -> None:
     assert candidates == []
     assert reports[-1].status == "skipped"
     assert reports[-1].error == "missing_token"
+
+
+def test_assrt_keeps_langdou_as_chinese_bilingual() -> None:
+    provider = AssrtProvider(token="test-token", client=LangdouOnlyClient(), sleeper=lambda _: None)
+
+    candidates = provider.search(
+        SubtitleSearchRequest(
+            video_path=Path("/media/Test.Movie.2026.mkv"),
+            title="测试电影",
+            year=2026,
+            media_type="movie",
+            season=None,
+            episode=None,
+            preferred="bilingual",
+            fallback_languages=["zh-cn"],
+        )
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].is_bilingual is True
+
+
+def test_assrt_download_count_has_more_weight_than_sparse_votes() -> None:
+    popular = _assrt_provider_quality(downloads=10_000, vote_score=0)
+    highly_rated_but_obscure = _assrt_provider_quality(downloads=5, vote_score=100)
+
+    assert popular is not None
+    assert highly_rated_but_obscure is not None
+    assert popular > highly_rated_but_obscure
 
 
 def test_assrt_rejects_conflicting_detail_filename_before_binary_download(tmp_path: Path) -> None:
@@ -348,7 +411,8 @@ def test_assrt_episode_search_prefers_season_pack() -> None:
     candidates = provider.search(request)
 
     assert len(candidates) == 1
-    assert [call[1]["params"]["q"] for call in client.calls] == ["Series Name S01"]
+    search_calls = [call for call in client.calls if call[0].endswith("/v1/sub/search")]
+    assert [call[1]["params"]["q"] for call in search_calls] == ["Series Name S01"]
 
 
 def test_assrt_direct_files_prefer_explicit_chinese_tracks() -> None:
@@ -433,7 +497,11 @@ def test_assrt_episode_search_falls_back_to_exact_episode() -> None:
     candidates = provider.search(request)
 
     assert len(candidates) == 1
-    assert [call[1]["params"]["q"] for call in client.calls] == ["Series Name S01", "Series Name S01E01"]
+    search_calls = [call for call in client.calls if call[0].endswith("/v1/sub/search")]
+    assert [call[1]["params"]["q"] for call in search_calls] == [
+        "Series Name S01",
+        "Series Name S01E01",
+    ]
 
 
 def test_assrt_negative_cache_reuses_season_miss_but_not_another_episode_miss() -> None:

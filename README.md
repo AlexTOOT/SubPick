@@ -75,6 +75,9 @@ networks:
 3. 将拾幕生成的 MoviePilot API Token 填入 ChineseSubFinder 插件。
 4. 扫描 Jellyfin 媒体库，确认字幕状态。
 
+ASSRT 会读取候选详情和下载统计以提高排序质量。由于官方 API 限速较低，启用后
+一次搜索可能需要更长时间，这是质量优先的正常行为。
+
 ## MoviePilot 对接
 
 继续使用 MoviePilot 的 ChineseSubFinder 插件：

@@ -11,7 +11,7 @@ except PackageNotFoundError:  # pragma: no cover - source tree without an instal
 # release cadence.
 ADAPTER_VERSIONS = {
     "subliminal": "1.0.0",
-    "assrt": "1.2.0",
+    "assrt": "1.3.0",
     "subdl": "2.0.0",
     "zimuku": "1.2.1",
 }

@@ -36,6 +36,7 @@ class SubtitleCandidate:
     release_info: str
     confidence: float
     raw_metadata: dict[str, Any] = field(default_factory=dict)
+    provider_quality: float | None = None
 
 
 @dataclass(frozen=True)

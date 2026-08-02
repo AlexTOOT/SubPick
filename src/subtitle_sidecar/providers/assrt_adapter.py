@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from io import BytesIO
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -31,6 +33,8 @@ MAX_ARCHIVE_LISTED_MEMBERS = 2000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_DIRECT_FILE_CANDIDATES = 3
 MAX_DIRECT_FILE_FAILURES = 3
+ASSRT_DETAIL_CACHE_SECONDS = 15 * 60
+MAX_ASSRT_DETAIL_CACHE_ENTRIES = 256
 
 
 class AssrtApiError(RuntimeError):
@@ -38,7 +42,7 @@ class AssrtApiError(RuntimeError):
 
 
 class AssrtProvider:
-    """Official ASSRT API adapter. It never stores short-lived download URLs."""
+    """Official ASSRT API adapter. It never persists short-lived download URLs."""
 
     name = "assrt"
 
@@ -62,6 +66,7 @@ class AssrtProvider:
         self._last_api_request_at: float | None = None
         self._reporter: Callable[[ProviderSearchReport], None] | None = None
         self._negative_cache = negative_cache
+        self._detail_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 
     def set_reporter(self, reporter: Callable[[ProviderSearchReport], None]) -> None:
         self._reporter = reporter
@@ -125,6 +130,7 @@ class AssrtProvider:
                     )
                 )
                 if candidates:
+                    candidates = self._enrich_candidate_quality(candidates)
                     break
                 if self._negative_cache is not None:
                     self._negative_cache.remember(cache_key)
@@ -154,11 +160,7 @@ class AssrtProvider:
         subtitle_id = candidate.raw_metadata.get("assrt_subtitle_id")
         if not isinstance(subtitle_id, int):
             raise AssrtApiError("assrt_candidate_missing_id")
-        detail = self._api_get("/v1/sub/detail", {"id": subtitle_id})
-        subtitles = ((detail.get("sub") or {}).get("subs") or [])
-        if not subtitles or not isinstance(subtitles[0], dict):
-            raise AssrtApiError("assrt_subtitle_not_found")
-        detail_item = subtitles[0]
+        detail_item = self._detail_item(subtitle_id)
         _assert_movie_year_compatible(candidate, _detail_filenames(detail_item))
         target_dir.mkdir(parents=True, exist_ok=True)
         direct_files = _supported_direct_files(detail_item.get("filelist"))
@@ -185,6 +187,99 @@ class AssrtProvider:
             _discard_downloaded_members(members)
             raise
         return DownloadedSubtitle(candidate=candidate, path=members[0].path, members=tuple(members))
+
+    def _enrich_candidate_quality(
+        self,
+        candidates: list[SubtitleCandidate],
+    ) -> list[SubtitleCandidate]:
+        enriched: list[SubtitleCandidate] = []
+        total = len(candidates)
+        for index, candidate in enumerate(candidates, start=1):
+            subtitle_id = candidate.raw_metadata.get("assrt_subtitle_id")
+            if not isinstance(subtitle_id, int):
+                enriched.append(candidate)
+                continue
+            try:
+                detail = self._detail_item(subtitle_id)
+            except Exception as error:
+                enriched.append(candidate)
+                self._emit(
+                    ProviderSearchReport(
+                        provider=self.name,
+                        status="progress",
+                        reason="quality_detail",
+                        search_context={
+                            "subtitle_id": subtitle_id,
+                            "index": index,
+                            "total": total,
+                            "status": "failed",
+                            "error": _safe_error(error),
+                        },
+                    )
+                )
+                continue
+
+            downloads = _as_optional_int(
+                _first_present(detail, "down_count", "download_count", "downloads")
+            )
+            views = _as_optional_int(_first_present(detail, "view_count", "views"))
+            detail_vote_score = _first_present(detail, "vote_score", "score")
+            vote_score = _as_optional_float(
+                detail_vote_score
+                if detail_vote_score is not None
+                else candidate.raw_metadata.get("assrt_vote_score")
+            )
+            quality = _assrt_provider_quality(downloads=downloads, vote_score=vote_score)
+            metadata = dict(candidate.raw_metadata)
+            metadata.update(
+                {
+                    "assrt_downloads": downloads,
+                    "assrt_views": views,
+                    "assrt_vote_score": vote_score,
+                }
+            )
+            enriched.append(
+                replace(
+                    candidate,
+                    provider_quality=quality,
+                    raw_metadata=metadata,
+                )
+            )
+            self._emit(
+                ProviderSearchReport(
+                    provider=self.name,
+                    status="progress",
+                    reason="quality_detail",
+                    search_context={
+                        "subtitle_id": subtitle_id,
+                        "index": index,
+                        "total": total,
+                        "status": "completed",
+                        "downloads": downloads or 0,
+                        "views": views or 0,
+                        "vote_score": vote_score or 0.0,
+                        "provider_quality": round(quality, 4) if quality is not None else 0.0,
+                    },
+                )
+            )
+        return enriched
+
+    def _detail_item(self, subtitle_id: int) -> dict[str, Any]:
+        now = self._clock()
+        cached = self._detail_cache.get(subtitle_id)
+        if cached is not None and now - cached[0] <= ASSRT_DETAIL_CACHE_SECONDS:
+            return cached[1]
+
+        detail = self._api_get("/v1/sub/detail", {"id": subtitle_id})
+        subtitles = ((detail.get("sub") or {}).get("subs") or [])
+        if not subtitles or not isinstance(subtitles[0], dict):
+            raise AssrtApiError("assrt_subtitle_not_found")
+        detail_item = subtitles[0]
+        self._detail_cache[subtitle_id] = (self._clock(), detail_item)
+        if len(self._detail_cache) > MAX_ASSRT_DETAIL_CACHE_ENTRIES:
+            oldest_id = min(self._detail_cache, key=lambda key: self._detail_cache[key][0])
+            self._detail_cache.pop(oldest_id, None)
+        return detail_item
 
     def quota(self) -> int:
         payload = self._api_get("/v1/user/quota", {})
@@ -340,10 +435,9 @@ def _to_candidate(
     if subtitle_id is None or not _is_chinese(subtitle):
         return None
     description = _language_description(subtitle)
-    bilingual = "双语" in description
-    bilingual = bilingual or bool((subtitle.get("m_extras") or {}).get("langdou"))
+    bilingual = "双语" in description or _language_flag(subtitle, "langdou")
     vote_score = _as_float(subtitle.get("vote_score") or subtitle.get("score"))
-    confidence = min(0.95, 0.55 + min(vote_score, 100.0) / 250.0 + (0.1 if bilingual else 0.0))
+    confidence = min(0.95, 0.55 + min(vote_score, 100.0) / 250.0)
     return SubtitleCandidate(
         provider="assrt",
         language="zh-hant" if "繁" in description else "zh-cn",
@@ -366,6 +460,7 @@ def _to_candidate(
             "assrt_subtitle_id": subtitle_id,
             "assrt_subtype": str(subtitle.get("subtype") or subtitle.get("m_subtype") or ""),
             "assrt_language": description,
+            "assrt_vote_score": vote_score,
             "expected_media_type": request.media_type,
             "expected_year": request.year,
             "expected_titles": [request.title, request.original_title],
@@ -404,19 +499,36 @@ def _assert_movie_year_compatible(
 
 def _is_chinese(subtitle: dict[str, Any]) -> bool:
     description = _language_description(subtitle)
-    if "中" in description:
+    if "中" in description or "双语" in description or _language_flag(subtitle, "langdou"):
         return True
     langlist = ((subtitle.get("lang") or {}).get("langlist") or {})
     extras = subtitle.get("m_extras") or {}
     return any(
         any(marker in str(key).lower() for marker in ("chi", "chs", "cht", "zho", "zh"))
         for key, value in langlist.items()
-        if value
+        if _is_truthy(value)
     ) or any(
-        marker in str(key).lower() and bool(value)
+        marker in str(key).lower() and _is_truthy(value)
         for key, value in extras.items()
         for marker in ("chi", "chs", "cht", "zho", "zh")
     )
+
+
+def _language_flag(subtitle: dict[str, Any], flag: str) -> bool:
+    langlist = ((subtitle.get("lang") or {}).get("langlist") or {})
+    extras = subtitle.get("m_extras") or {}
+    expected = flag.casefold()
+    return any(
+        str(key).casefold() == expected and _is_truthy(value)
+        for values in (langlist, extras)
+        for key, value in values.items()
+    )
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _language_description(subtitle: dict[str, Any]) -> str:
@@ -734,3 +846,38 @@ def _as_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _as_optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_present(values: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in values and values[key] is not None and values[key] != "":
+            return values[key]
+    return None
+
+
+def _as_optional_int(value: Any) -> int | None:
+    number = _as_optional_float(value)
+    if number is None:
+        return None
+    return max(0, int(number))
+
+
+def _assrt_provider_quality(
+    *,
+    downloads: int | None,
+    vote_score: float | None,
+) -> float | None:
+    if downloads is None and vote_score is None:
+        return None
+    download_signal = min(math.log10(max(downloads or 0, 0) + 1) / 5.0, 1.0)
+    vote_signal = min(max(vote_score or 0.0, 0.0) / 100.0, 1.0)
+    return download_signal * 0.8 + vote_signal * 0.2

@@ -232,6 +232,7 @@ def test_work_results_keep_bilingual_rows_and_parse_real_download_column() -> No
         1753,
         1225,
     ]
+    assert all(candidate.provider_quality == candidate.confidence for candidate in candidates)
     assert candidates[0].confidence > candidates[1].confidence > candidates[2].confidence
 
 

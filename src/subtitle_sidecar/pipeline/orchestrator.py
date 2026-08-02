@@ -17,7 +17,12 @@ from subtitle_sidecar.pipeline.candidate_identity import (
     subtitle_content_identity,
 )
 from subtitle_sidecar.pipeline.naming import build_subtitle_path
-from subtitle_sidecar.pipeline.scoring import candidate_mismatch_reason, score_candidate, sort_candidates
+from subtitle_sidecar.pipeline.scoring import (
+    candidate_mismatch_reason,
+    provider_quality_reference,
+    score_candidate,
+    sort_candidates,
+)
 from subtitle_sidecar.pipeline.status import (
     TASK_CHECKING_EMBEDDED,
     TASK_CHECKING_EXISTING,
@@ -489,6 +494,10 @@ class SubtitleOrchestrator:
                     video_path=resolved_path,
                     season=task.season,
                     episode=task.episode,
+                    provider_quality_reference=provider_quality_reference(
+                        compatible_candidates,
+                        selected_candidate,
+                    ),
                 ),
                 release_info=selected_candidate.release_info,
                 source_url=selected_candidate.source_url,
@@ -1505,7 +1514,7 @@ class SubtitleOrchestrator:
         attempt_number: int,
         max_attempts: int,
     ) -> dict[str, Any]:
-        return {
+        details = {
             "attempt_number": attempt_number,
             "max_attempts": max_attempts,
             "provider": candidate.provider,
@@ -1513,6 +1522,18 @@ class SubtitleOrchestrator:
             "title": candidate.title,
             "source_url": candidate.source_url,
         }
+        if candidate.provider_quality is not None:
+            details["provider_quality"] = round(candidate.provider_quality, 4)
+        for key in (
+            "assrt_downloads",
+            "assrt_views",
+            "assrt_vote_score",
+            "zimuku_downloads",
+            "zimuku_quality",
+        ):
+            if candidate.raw_metadata.get(key) is not None:
+                details[key] = candidate.raw_metadata[key]
+        return details
 
     def _candidate_message(self, action: str, details: dict[str, Any]) -> str:
         provider = str(details.get("provider") or "unknown").removeprefix("subliminal:")
