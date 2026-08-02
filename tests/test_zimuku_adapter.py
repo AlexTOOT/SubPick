@@ -17,6 +17,7 @@ from subtitle_sidecar.providers.zimuku_adapter import (
     ZimukuProvider,
     _SearchQuery,
     _extract_external_archive,
+    _matching_work_pages,
     _parse_lsar_entries,
     _parse_search_results,
     _search_queries,
@@ -165,6 +166,32 @@ def test_movie_search_falls_back_to_plain_localized_and_original_titles() -> Non
         ("新·驯龙高手", "title"),
         ("How to Train Your Dragon", "title"),
     ]
+
+
+def test_movie_work_page_accepts_adjacent_release_year_when_title_matches() -> None:
+    html = SEARCH_HTML.replace("(2025)", "(2024)")
+
+    pages = _matching_work_pages(
+        html,
+        request=movie_request(),
+        query=_SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title"),
+    )
+
+    assert pages == [
+        ("新·驯龙高手 How to Train Your Dragon (2024)", "//zimuku.org/subs/73237.html")
+    ]
+
+
+def test_movie_work_page_rejects_distant_release_year() -> None:
+    html = SEARCH_HTML.replace("(2025)", "(2022)")
+
+    pages = _matching_work_pages(
+        html,
+        request=movie_request(),
+        query=_SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title"),
+    )
+
+    assert pages == []
 
 
 def test_search_opens_full_work_page_instead_of_using_preview_only() -> None:

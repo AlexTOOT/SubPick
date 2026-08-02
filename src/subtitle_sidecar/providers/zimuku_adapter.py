@@ -812,7 +812,10 @@ def _work_matches_request(
     episode = request.media_type.lower() in {"episode", "tv", "tvshow"}
     if not episode and request.year is not None:
         years = set(_release_years(work_title))
-        if years and request.year not in years:
+        # Festival, theatrical and streaming releases can legitimately differ
+        # by one year between Jellyfin and Zimuku. Keep nearby years eligible;
+        # the common candidate validator still rejects clearly distant years.
+        if years and all(abs(year - request.year) > 1 for year in years):
             return False
     if episode and request.season is not None:
         detected = _season_number(work_title)
