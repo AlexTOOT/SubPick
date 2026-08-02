@@ -452,6 +452,7 @@ th { padding: 11px 13px; background: #f6f6f4; color: var(--muted); font-size: 12
 td { padding: 12px 13px; border-top: 1px solid #e8e8ea; vertical-align: middle; }
 tbody tr:hover { background: #f7f9ff; }
 .empty { padding: 26px !important; color: var(--muted); text-align: center; }
+.media-grid > .empty { grid-column: 1 / -1; width: 100%; }
 .path { max-width: 540px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .secondary { color: var(--muted); font-size: 12px; }
 .badge { display: inline-flex; align-items: center; min-height: 25px; padding: 0 9px; border-radius: 999px; background: var(--stone); color: #555561; font-size: 11px; font-weight: 700; white-space: nowrap; }
@@ -786,15 +787,16 @@ tbody tr:hover { background: #f7f9ff; }
 .setup-provider { padding: 13px 14px; border: 1px solid var(--line); border-radius: 7px; background: #fafbf9; }
 .setup-provider > label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; }
 .setup-provider > small { display: block; margin: 5px 0 0 26px; color: var(--muted); line-height: 1.45; }
-.setup-provider-fields { display: grid; gap: 10px; margin: 13px 0 0 26px; padding-top: 12px; overflow: hidden; border-top: 1px solid var(--line); animation: setup-provider-expand 210ms cubic-bezier(.2,.75,.25,1); }
-@keyframes setup-provider-expand {
-  from { max-height: 0; opacity: 0; transform: translateY(-7px); }
-  to { max-height: 820px; opacity: 1; transform: translateY(0); }
-}
+.setup-provider-fields { display: grid; gap: 10px; margin: 13px 0 0 26px; padding-top: 12px; border-top: 1px solid var(--line); transition: opacity 160ms ease; }
 .setup-provider-fields > label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .setup-provider-fields .option-row label { color: var(--ink); }
 .setup-provider a,
 .setup-provider-fields a { color: var(--green); }
+.setup-provider.is-disabled > small,
+.setup-provider.is-disabled .setup-provider-fields { opacity: .46; }
+.setup-source-fields { display: grid; gap: 10px; transition: opacity 160ms ease; }
+.setup-source-fields.is-disabled { opacity: .46; }
+.setup-provider-fields :disabled { cursor: not-allowed; }
 .setup-secret-note { color: var(--green); font-size: 11px; }
 .setup-summary { display: grid; gap: 8px; margin-top: 16px; }
 .setup-summary div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 7px; }

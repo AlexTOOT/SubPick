@@ -170,8 +170,14 @@ def _setup_status(
         for item in providers.values()
     )
     steps = [
-        _setup_step("storage", "运行目录", storage_ready, "settings", "health"),
-        _setup_step("media", "媒体目录", media_dir["status"] == "ok", "settings", "paths"),
+        _setup_step(
+            "jellyfin",
+            "Jellyfin",
+            bool(jellyfin.get("connected")),
+            "settings",
+            "jellyfin",
+        ),
+        _setup_step("provider", "字幕来源", provider_ready, "settings", "providers"),
         {
             "id": "moviepilot",
             "label": "MoviePilot",
@@ -190,25 +196,7 @@ def _setup_status(
                 else None
             ),
         },
-        _setup_step(
-            "jellyfin",
-            "Jellyfin",
-            bool(jellyfin.get("connected")),
-            "settings",
-            "jellyfin",
-        ),
-        _setup_step("provider", "字幕来源", provider_ready, "settings", "providers"),
     ]
-    if providers.get("zimuku", {}).get("enabled"):
-        steps.append(
-            _setup_step(
-                "ocr",
-                "验证码识别",
-                runtime_metadata.get("zimuku_ocr_last_check_status") == "ok",
-                "settings",
-                "providers",
-            )
-        )
     notifications: list[dict[str, Any]] = []
     if not storage_ready:
         notifications.append(

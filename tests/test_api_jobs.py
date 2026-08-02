@@ -287,6 +287,11 @@ def test_diagnostics_is_local_only_redacted_and_degraded_when_checks_fail(
         "connected": False,
         "last_checked_at": None,
     }
+    assert [step["id"] for step in body["setup"]["steps"]] == [
+        "jellyfin",
+        "provider",
+        "moviepilot",
+    ]
     assert "paths" not in body
     assert all(tool["status"] == "degraded" for tool in body["tools"])
     assert "jellyfin.example.invalid" not in serialized

@@ -127,7 +127,9 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "data-setup-page" in js
     assert "wizard.page = Math.min(restoredPage, wizard.maxPage);" in js
     assert "subpick-setup-dismissed-v2" not in js
-    assert "setup-provider-expand" in css
+    assert "syncSetupProviderFieldStates" in js
+    assert "setup-provider-expand" not in css
+    assert ".media-grid > .empty { grid-column: 1 / -1; width: 100%; }" in css
     assert '.provider-config-card[open] > summary::after { transform: rotate(90deg); }' in css
 
 

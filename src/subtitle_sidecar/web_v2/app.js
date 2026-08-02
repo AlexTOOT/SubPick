@@ -330,6 +330,7 @@ function renderSetupDialog() {
   }).join("");
   const direction = wizard.direction === "backward" ? "backward" : wizard.direction === "forward" ? "forward" : "none";
   $("#setup-dialog-body").innerHTML = `<div class="setup-page setup-page-${direction}">${setupWizardPageHtml(wizard.page, wizard.draft)}</div>`;
+  if (wizard.page === 2) syncSetupProviderFieldStates();
   wizard.direction = "none";
   $("#setup-back").hidden = wizard.page === 0 || wizard.page === pages.length - 1;
   $("#setup-continue").textContent = wizard.page === 0 ? "开始设置" : wizard.page === pages.length - 1 ? "完成" : "下一步";
@@ -462,40 +463,42 @@ function setupWizardPageHtml(page, draft) {
 function setupProvidersPageHtml(draft) {
   return `
     <div class="setup-provider-list">
-      <section class="setup-provider" data-setup-provider="zimuku">
+      <section class="setup-provider ${draft.zimukuEnabled ? "" : "is-disabled"}" data-setup-provider="zimuku">
         <label><input id="setup-zimuku-enabled" type="checkbox" ${checked(draft.zimukuEnabled)}>Zimuku（推荐）</label>
         <small>无需账号，使用 Compose 内置的验证码识别服务。</small>
       </section>
-      <section class="setup-provider" data-setup-provider="subliminal">
+      <section class="setup-provider ${draft.subliminalEnabled ? "" : "is-disabled"}" data-setup-provider="subliminal">
         <label><input id="setup-subliminal-enabled" type="checkbox" ${checked(draft.subliminalEnabled)}>Subliminal</label>
         <small>通用字幕来源。OpenSubtitles 可匿名使用，但额度较低。</small>
-        ${draft.subliminalEnabled ? `<div class="setup-provider-fields">
+        <div class="setup-provider-fields">
           <div class="option-row">
             <label><input id="setup-opensubtitles-enabled" type="checkbox" ${checked(draft.opensubtitlesEnabled)}>OpenSubtitles</label>
             <label><input id="setup-opensubtitlescom-enabled" type="checkbox" ${checked(draft.opensubtitlescomEnabled)}>OpenSubtitles.com</label>
           </div>
-          ${draft.opensubtitlesEnabled ? `
+          <div class="setup-source-fields" data-setup-source="opensubtitles">
             <label>OpenSubtitles 用户名（建议填写）<input id="setup-opensubtitles-username" value="${escapeHtml(draft.opensubtitlesUsername)}" autocomplete="off"></label>
-            <label>OpenSubtitles 密码<input id="setup-opensubtitles-password" type="password" value="${escapeHtml(draft.opensubtitlesPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlesPasswordConfigured)}</label>` : ""}
-          ${draft.opensubtitlescomEnabled ? `
+            <label>OpenSubtitles 密码<input id="setup-opensubtitles-password" type="password" value="${escapeHtml(draft.opensubtitlesPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlesPasswordConfigured)}</label>
+          </div>
+          <div class="setup-source-fields" data-setup-source="opensubtitlescom">
             <p><a href="https://www.opensubtitles.com/en/users/sign_up" target="_blank" rel="noreferrer">注册 OpenSubtitles.com</a>，并在 <a href="https://www.opensubtitles.com/en/consumers" target="_blank" rel="noreferrer">API Consumers</a> 获取 API Key。该来源必须完成认证。</p>
             <label>OpenSubtitles.com 用户名<input id="setup-opensubtitlescom-username" value="${escapeHtml(draft.opensubtitlescomUsername)}" autocomplete="off"></label>
             <label>OpenSubtitles.com 密码<input id="setup-opensubtitlescom-password" type="password" value="${escapeHtml(draft.opensubtitlescomPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomPasswordConfigured, true)}</label>
-            <label>OpenSubtitles.com API Key<input id="setup-opensubtitlescom-apikey" type="password" value="${escapeHtml(draft.opensubtitlescomApiKey)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomApiKeyConfigured, true)}</label>` : ""}
-        </div>` : ""}
+            <label>OpenSubtitles.com API Key<input id="setup-opensubtitlescom-apikey" type="password" value="${escapeHtml(draft.opensubtitlescomApiKey)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlescomApiKeyConfigured, true)}</label>
+          </div>
+        </div>
       </section>
-      <section class="setup-provider" data-setup-provider="assrt">
+      <section class="setup-provider ${draft.assrtEnabled ? "" : "is-disabled"}" data-setup-provider="assrt">
         <label><input id="setup-assrt-enabled" type="checkbox" ${checked(draft.assrtEnabled)}>ASSRT</label>
         <small>中文资源丰富。<a href="https://assrt.net/user/register.xml" target="_blank" rel="noreferrer">注册</a>后在<a href="https://secure.assrt.net/usercp.php" target="_blank" rel="noreferrer">用户面板</a>获取 API Key。</small>
-        ${draft.assrtEnabled ? `<div class="setup-provider-fields"><label>API Key<input id="setup-assrt-token" type="password" value="${escapeHtml(draft.assrtToken)}" autocomplete="new-password">${setupSecretHint(draft.assrtTokenConfigured, true)}</label></div>` : ""}
+        <div class="setup-provider-fields"><label>API Key<input id="setup-assrt-token" type="password" value="${escapeHtml(draft.assrtToken)}" autocomplete="new-password">${setupSecretHint(draft.assrtTokenConfigured, true)}</label></div>
       </section>
-      <section class="setup-provider" data-setup-provider="subdl">
+      <section class="setup-provider ${draft.subdlEnabled ? "" : "is-disabled"}" data-setup-provider="subdl">
         <label><input id="setup-subdl-enabled" type="checkbox" ${checked(draft.subdlEnabled)}>SubDL</label>
         <small>支持 IMDb/TMDb 检索。<a href="https://subdl.com/register" target="_blank" rel="noreferrer">注册</a>后在<a href="https://subdl.com/panel/api" target="_blank" rel="noreferrer">API 面板</a>获取 API Key。</small>
-        ${draft.subdlEnabled ? `<div class="setup-provider-fields">
+        <div class="setup-provider-fields">
           <label>API Key<input id="setup-subdl-key" type="password" value="${escapeHtml(draft.subdlApiKey)}" autocomplete="new-password">${setupSecretHint(draft.subdlApiKeyConfigured, true)}</label>
           <label class="toggle-row"><input id="setup-subdl-pro" type="checkbox" ${checked(draft.subdlPro)}>SubDL Pro：下载时携带 API Key</label>
-        </div>` : ""}
+        </div>
       </section>
     </div>`;
 }
@@ -764,25 +767,27 @@ function navigateSetupWizardPage(targetPage) {
   renderSetupDialog();
 }
 
-function rerenderSetupProviderChoice(event) {
-  const providerToggle = event.target.matches(
-    "#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-assrt-enabled, #setup-subdl-enabled",
-  );
-  const fields = event.target.closest(".setup-provider")?.querySelector(".setup-provider-fields");
-  collectSetupWizardPage();
-  if (!providerToggle || event.target.checked || !fields || typeof fields.animate !== "function"
-      || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    renderSetupDialog();
-    return;
-  }
-  const animation = fields.animate(
-    [
-      { maxHeight: `${fields.scrollHeight}px`, opacity: 1, transform: "translateY(0)" },
-      { maxHeight: "0", opacity: 0, transform: "translateY(-7px)" },
-    ],
-    { duration: 180, easing: "cubic-bezier(.4,0,.2,1)" },
-  );
-  animation.finished.catch(() => {}).finally(renderSetupDialog);
+function syncSetupProviderFieldStates() {
+  $$(".setup-provider", $("#setup-dialog-body")).forEach((provider) => {
+    const providerToggle = provider.querySelector(":scope > label input[type='checkbox']");
+    const enabled = providerToggle?.checked !== false;
+    provider.classList.toggle("is-disabled", !enabled);
+    provider.querySelectorAll(".setup-provider-fields input, .setup-provider-fields select, .setup-provider-fields textarea")
+      .forEach((control) => { control.disabled = !enabled; });
+  });
+
+  const subliminal = $('[data-setup-provider="subliminal"]', $("#setup-dialog-body"));
+  const subliminalEnabled = $("#setup-subliminal-enabled")?.checked === true;
+  [
+    ["opensubtitles", "#setup-opensubtitles-enabled"],
+    ["opensubtitlescom", "#setup-opensubtitlescom-enabled"],
+  ].forEach(([source, toggleSelector]) => {
+    const fields = subliminal?.querySelector(`[data-setup-source="${source}"]`);
+    if (!fields) return;
+    const enabled = subliminalEnabled && $(toggleSelector)?.checked === true;
+    fields.classList.toggle("is-disabled", !enabled);
+    fields.querySelectorAll("input, select, textarea").forEach((control) => { control.disabled = !enabled; });
+  });
 }
 
 function goToSetupTarget(view, section = "") {
@@ -2608,7 +2613,8 @@ function bindEvents() {
   });
   $("#setup-dialog-body").addEventListener("change", (event) => {
     if (!event.target.matches("#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-opensubtitles-enabled, #setup-opensubtitlescom-enabled, #setup-assrt-enabled, #setup-subdl-enabled")) return;
-    rerenderSetupProviderChoice(event);
+    collectSetupWizardPage();
+    syncSetupProviderFieldStates();
   });
   $("#setup-dialog-body").addEventListener("click", (event) => {
     if (!event.target.closest("#setup-token-generate")) return;
