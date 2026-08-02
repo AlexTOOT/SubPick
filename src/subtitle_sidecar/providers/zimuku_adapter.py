@@ -758,11 +758,7 @@ def _parse_candidate_rows(
         bilingual = _is_bilingual(language_text, subtitle_title)
         quality = _quality_score(row)
         downloads = _download_count(row)
-        confidence = min(
-            0.95,
-            0.64 + min(quality, 10.0) * 0.02 + (0.05 if bilingual else 0.0)
-            + min(math.log10(downloads + 1), 5.0) * 0.01,
-        )
+        confidence = _candidate_confidence(quality=quality, downloads=downloads)
         candidates.append(
             SubtitleCandidate(
                 provider="zimuku",
@@ -867,7 +863,10 @@ def _zimuku_language(value: str) -> str | None:
     normalized = value.casefold()
     simplified = any(token in normalized for token in ("简体", "簡體", "chs", "china", "chinese"))
     traditional = any(token in normalized for token in ("繁体", "繁體", "cht", "big5", "hongkong"))
-    generic = "中文" in normalized or "jollyroger" in normalized
+    generic = any(
+        token in normalized
+        for token in ("中文", "双语", "雙語", "中英", "简英", "簡英", "繁英", "jollyroger")
+    )
     if traditional and not simplified:
         return "zh-hant"
     if simplified or traditional or generic:
@@ -904,12 +903,23 @@ def _quality_score(row: Any) -> float:
 
 
 def _download_count(row: Any) -> int:
-    text = row.get_text(" ", strip=True)
-    matches = re.findall(r"(\d+(?:\.\d+)?)\s*(万)?", text)
-    if not matches:
-        return 0
-    value, unit = matches[-1]
-    return int(float(value) * (10000 if unit else 1))
+    # The work table also contains quality and upload-date numbers. Restrict
+    # parsing to the download-count cell so a date such as 25/9/20 is not
+    # mistaken for 20 downloads.
+    for cell in reversed(row.select("td.tac.hidden-xs")):
+        text = cell.get_text(" ", strip=True)
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(万)?", text)
+        if match:
+            return int(float(match.group(1)) * (10000 if match.group(2) else 1))
+    return 0
+
+
+def _candidate_confidence(*, quality: float, downloads: int) -> float:
+    """Rank Zimuku candidates primarily by popularity, then site quality."""
+
+    download_signal = min(math.log10(max(0, downloads) + 1) / 5.0, 1.0)
+    quality_signal = min(max(quality, 0.0), 10.0) / 10.0
+    return min(0.95, 0.55 + download_signal * 0.35 + quality_signal * 0.05)
 
 
 def _captcha_image(html: str) -> bytes | None:

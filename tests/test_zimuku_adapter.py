@@ -20,6 +20,7 @@ from subtitle_sidecar.providers.zimuku_adapter import (
     _matching_work_pages,
     _parse_lsar_entries,
     _parse_search_results,
+    _parse_work_results,
     _search_queries,
 )
 
@@ -48,6 +49,19 @@ SEASON_HTML = """
     <span class="label label-info">ASS/SSA</span>
   </td><td><i title="字幕质量:10分"></i></td><td>1.2万</td></tr></tbody></table></div>
 </div></div>
+"""
+
+MULTI_CANDIDATE_HTML = """
+<table><tbody>
+  <tr><td class="first"><a href="/detail/219503.html" title="怪奇收割.Strange.Harvest.2025.中英字幕">bilingual</a><span class="label">ASS/SSA</span></td>
+    <td class="tac lang"><img alt="双语"></td><td class="tac hidden-xs"><i title="字幕质量:8.9分"></i></td><td class="tac hidden-xs">6138</td><td class="last hidden-xs">25/9/20</td></tr>
+  <tr><td class="first"><a href="/detail/219498.html" title="Strange.Harvest.2025.srt">simplified</a><span class="label">SRT</span></td>
+    <td class="tac lang"><img alt="简体中文"></td><td class="tac hidden-xs"><i title="字幕质量:9分"></i></td><td class="tac hidden-xs">1753</td><td class="last hidden-xs">25/9/20</td></tr>
+  <tr><td class="first"><a href="/detail/219435.html" title="Strange.Harvest.2024.srt">simplified</a><span class="label">SRT</span></td>
+    <td class="tac lang"><img alt="简体中文"></td><td class="tac hidden-xs"><i title="字幕质量:6分"></i></td><td class="tac hidden-xs">1225</td><td class="last hidden-xs">25/9/18</td></tr>
+  <tr><td class="first"><a href="/detail/219028.html" title="Strange.Harvest.2024.srt">english</a><span class="label">SRT</span></td>
+    <td class="tac lang"><img alt="English"></td><td class="tac hidden-xs"><i title="字幕质量:10分"></i></td><td class="tac hidden-xs">506</td><td class="last hidden-xs">25/9/9</td></tr>
+</tbody></table>
 """
 
 
@@ -192,6 +206,32 @@ def test_movie_work_page_rejects_distant_release_year() -> None:
     )
 
     assert pages == []
+
+
+def test_work_results_keep_bilingual_rows_and_parse_real_download_column() -> None:
+    request = movie_request()
+    query = _SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title")
+
+    candidates = _parse_work_results(
+        MULTI_CANDIDATE_HTML,
+        work_title="怪奇收割 Strange Harvest (2024)",
+        request=request,
+        query=query,
+        request_base_url="https://srtku.com",
+    )
+
+    assert [candidate.source_url for candidate in candidates] == [
+        "https://zimuku.org/detail/219503.html",
+        "https://zimuku.org/detail/219498.html",
+        "https://zimuku.org/detail/219435.html",
+    ]
+    assert candidates[0].is_bilingual is True
+    assert [candidate.raw_metadata["zimuku_downloads"] for candidate in candidates] == [
+        6138,
+        1753,
+        1225,
+    ]
+    assert candidates[0].confidence > candidates[1].confidence > candidates[2].confidence
 
 
 def test_search_opens_full_work_page_instead_of_using_preview_only() -> None:
