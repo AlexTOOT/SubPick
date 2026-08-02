@@ -30,3 +30,18 @@ def test_detects_chinese_marker_from_filename_without_full_file_read(tmp_path: P
     assert result.has_chinese is True
     assert result.has_bilingual is False
     assert result.matches[0].path == subtitle
+
+
+def test_detects_chinese_content_in_utf16_external_subtitle(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.mkv"
+    video.write_bytes(b"fake")
+    subtitle = tmp_path / "Movie.default.srt"
+    subtitle.write_text(
+        "1\n00:00:01,000 --> 00:00:02,000\n你好\n",
+        encoding="utf-16",
+    )
+
+    result = detect_external_subtitles(video)
+
+    assert result.has_chinese is True
+    assert result.matches[0].path == subtitle

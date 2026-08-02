@@ -1,46 +1,47 @@
-# Provider Adapter API
+# Provider Adapter 接口
 
-SubPick keeps its subtitle sources as independent adapters. The core owns task
-state, rate-aware scheduling, candidate ranking, validation, syncing and placement; an
-adapter owns only provider-specific search and download behavior.
+拾幕把每个字幕来源实现为独立适配器。主程序只依赖统一协议，不直接依赖站点 API、
+网页结构或认证方式。
 
-An external adapter may live in its own Git repository and Python package. It registers
-one factory through Python packaging:
+## 核心协议
 
-```toml
-[project.entry-points."subtitle_sidecar.providers"]
-example = "subtitle_sidecar_example:factory"
-```
+适配器需要提供：
 
-The exported object implements the public contract in
-`subtitle_sidecar.providers.base`:
+- 稳定的 `name`；
+- `search(request)`：接收统一媒体信息并返回候选；
+- `download(candidate, target_dir)`：下载候选并返回一个或多个字幕文件；
+- 可选的 `set_reporter(reporter)`：报告每次检索策略、耗时、数量和错误。
+
+工厂需要提供 `ProviderAdapterMetadata`，声明版本、媒体类型、查询字段、传输方式、
+字幕包能力和候选身份是否稳定。内置工厂注册在
+`subtitle_sidecar.providers.adapters`，主程序通过注册表按配置顺序加载。
 
 ```python
-from collections.abc import Mapping
-from typing import Any
-
-from subtitle_sidecar.providers.base import ProviderAdapterMetadata, SubtitleProvider
+from subtitle_sidecar.providers.base import ProviderAdapterMetadata
 
 
-class ExampleFactory:
+class ExampleAdapterFactory:
     metadata = ProviderAdapterMetadata(
         name="example",
-        display_name="Example Subtitles",
-        version="1",
-        homepage="https://github.com/example/subtitle-sidecar-example",
+        version="1.0.0",
+        homepage="https://example.com",
+        media_types=("movie", "episode"),
+        query_fields=("imdb", "title", "original_title", "filename"),
+        transport="api",
+        supports_bundles=False,
+        stable_candidate_identity=True,
     )
 
-    def create(self, settings: Mapping[str, Any]) -> SubtitleProvider:
+    def create(self, settings):
         return ExampleProvider(settings)
-
-
-factory = ExampleFactory()
 ```
 
-`SubtitleProvider` must expose a stable `name`, `search(request)` and
-`download(candidate, target_dir)`. It should never persist secrets or expiring download
-URLs in candidates. Adapters are trusted local Python packages: only install adapters
-from sources the NAS administrator trusts. A future core release may add an adapter
-manifest for dynamic WebUI form rendering; until then, adapters should document their
-own YAML setting schema under `providers.adapters.<adapter-name>`. Built-in adapters may
-also offer a dedicated WebUI settings card and secret storage API.
+## 边界约束
+
+- 适配器自行处理认证、限速、配额和站点错误，但不得绕过付费墙或访问控制。
+- API Key、密码和验证码答案不得写入日志、候选元数据或数据库明文字段。
+- 候选应尽量提供稳定的站点 ID 或公开详情页 URL，供重试黑名单识别。
+- 压缩包必须限制成员数量、总大小并阻止路径穿越。
+- 站点特有规则留在适配器内；通用排序、校验、对轴和落库由主流程负责。
+
+当前内置适配器与主镜像一起发布，不提供独立安装或在线更新。

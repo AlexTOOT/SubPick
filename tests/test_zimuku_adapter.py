@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -16,7 +17,9 @@ from subtitle_sidecar.providers.zimuku_adapter import (
     ZimukuProvider,
     _SearchQuery,
     _extract_external_archive,
+    _parse_lsar_entries,
     _parse_search_results,
+    _search_queries,
 )
 
 
@@ -151,6 +154,17 @@ def test_movie_search_uses_title_and_year_and_parses_chinese_candidate() -> None
     assert progress.reason == "新·驯龙高手 2025"
     assert progress.search_context["query"] == "新·驯龙高手 2025"
     assert progress.search_context["strategy"] == "title_year"
+
+
+def test_movie_search_falls_back_to_plain_localized_and_original_titles() -> None:
+    queries = _search_queries(movie_request())
+
+    assert [(query.value, query.strategy) for query in queries] == [
+        ("新·驯龙高手 2025", "title_year"),
+        ("How to Train Your Dragon 2025", "title_year"),
+        ("新·驯龙高手", "title"),
+        ("How to Train Your Dragon", "title"),
+    ]
 
 
 def test_search_opens_full_work_page_instead_of_using_preview_only() -> None:
@@ -422,7 +436,10 @@ Size = 14
         (folder / "权力的游戏.S01E02.chs.ass").write_bytes(b"[Script Info]\n")
         return SimpleNamespace(stdout="")
 
-    monkeypatch.setattr("subtitle_sidecar.providers.zimuku_adapter.shutil.which", lambda _: "7z")
+    monkeypatch.setattr(
+        "subtitle_sidecar.providers.zimuku_adapter.shutil.which",
+        lambda name: "7z" if name == "7z" else None,
+    )
     monkeypatch.setattr(
         "subtitle_sidecar.providers.zimuku_adapter._run_archive_tool", fake_archive_tool
     )
@@ -472,3 +489,47 @@ Size = 14
 
     assert [member.filename for member in members] == ["权力的游戏.S01E03.chs.ass"]
     assert [command[0:2] for command in calls] == [["7z", "l"], ["7z", "x"], ["unar", "-f"]]
+
+
+def test_rar_prefers_lsar_and_unar_when_available(monkeypatch, tmp_path: Path) -> None:
+    listing = json.dumps(
+        {
+            "lsarFormatVersion": 2,
+            "lsarContents": [
+                {
+                    "XADFileName": "字幕/Her.2013.chs.ass",
+                    "XADFileSize": 14,
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    calls = []
+
+    def fake_archive_tool(command, *, binary=False):
+        calls.append(command)
+        if command[0] == "lsar":
+            return SimpleNamespace(stdout=listing)
+        output_dir = Path(command[command.index("-o") + 1])
+        folder = output_dir / "字幕"
+        folder.mkdir(parents=True)
+        (folder / "Her.2013.chs.ass").write_bytes(b"[Script Info]\n")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(
+        "subtitle_sidecar.providers.zimuku_adapter.shutil.which",
+        lambda name: name if name in {"7zz", "lsar", "unar"} else None,
+    )
+    monkeypatch.setattr(
+        "subtitle_sidecar.providers.zimuku_adapter._run_archive_tool", fake_archive_tool
+    )
+
+    members = _extract_external_archive(b"Rar!\x1a\x07test", "season.rar", tmp_path)
+
+    assert [member.filename for member in members] == ["Her.2013.chs.ass"]
+    assert [command[0:2] for command in calls] == [["lsar", "-json"], ["unar", "-f"]]
+
+
+def test_parse_lsar_entries_rejects_invalid_output() -> None:
+    with pytest.raises(ZimukuError, match="zimuku_archive_extract_failed"):
+        _parse_lsar_entries("not-json")

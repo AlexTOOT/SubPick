@@ -85,7 +85,13 @@ def _read_subtitle_text(path: Path) -> tuple[str | None, str | None]:
         payload = path.read_bytes()
     except OSError:
         return None, None
-    for encoding in ("utf-8-sig", "utf-8", "gb18030", "big5"):
+    encodings: list[str] = []
+    if payload.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        encodings.append("utf-32")
+    elif payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    encodings.extend(("utf-8-sig", "utf-8", "gb18030", "big5"))
+    for encoding in encodings:
         try:
             return payload.decode(encoding), encoding
         except UnicodeDecodeError:

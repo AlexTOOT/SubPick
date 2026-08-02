@@ -78,7 +78,13 @@ def _shares_video_stem(video_path: Path, subtitle_path: Path) -> bool:
 
 def _read_subtitle_text(path: Path) -> str:
     raw = path.read_bytes()[:MAX_READ_BYTES]
-    for encoding in ("utf-8", "utf-8-sig", "gb18030"):
+    encodings: list[str] = []
+    if raw.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        encodings.append("utf-32")
+    elif raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    encodings.extend(("utf-8-sig", "utf-8", "gb18030"))
+    for encoding in encodings:
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:

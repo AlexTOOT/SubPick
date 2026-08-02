@@ -13,7 +13,7 @@ ADAPTER_VERSIONS = {
     "subliminal": "1.0.0",
     "assrt": "1.2.0",
     "subdl": "2.0.0",
-    "zimuku": "1.1.0",
+    "zimuku": "1.2.0",
 }
 
 DATABASE_SCHEMA_VERSION = 3

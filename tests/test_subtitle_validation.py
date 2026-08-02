@@ -29,6 +29,21 @@ def test_accepts_common_gb18030_subtitle_encoding(tmp_path: Path) -> None:
     assert result.encoding == "gb18030"
 
 
+def test_accepts_utf16_subtitle_with_bom(tmp_path: Path) -> None:
+    subtitle = tmp_path / "Movie.zh-cn.ass"
+    subtitle.write_text(
+        "[Script Info]\n[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,你好\n",
+        encoding="utf-16",
+    )
+
+    result = validate_subtitle_file(subtitle)
+
+    assert result.is_valid is True
+    assert result.has_chinese is True
+    assert result.encoding == "utf-16"
+
+
 def test_accepts_subtitle_that_runs_far_beyond_video_duration(tmp_path: Path) -> None:
     subtitle = tmp_path / "Movie.zh-cn.srt"
     subtitle.write_text("1\n02:00:01,000 --> 02:00:02,000\n你好\n", encoding="utf-8")

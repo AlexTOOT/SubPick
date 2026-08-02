@@ -620,13 +620,22 @@ def _search_queries(request: SubtitleSearchRequest) -> list[_SearchQuery]:
                 )
     else:
         for title, source in titles:
-            value = f"{title} {request.year}" if request.year else title
+            if request.year:
+                queries.append(
+                    _SearchQuery(
+                        value=f"{title} {request.year}",
+                        title=title,
+                        title_source=source,
+                        strategy="title_year",
+                    )
+                )
+        for title, source in titles:
             queries.append(
                 _SearchQuery(
-                    value=value,
+                    value=title,
                     title=title,
                     title_source=source,
-                    strategy="title_year" if request.year else "title",
+                    strategy="title",
                 )
             )
     return queries
@@ -1053,18 +1062,27 @@ def _extract_external_archive(
     filename: str,
     target_dir: Path,
 ) -> list[DownloadedSubtitleMember]:
+    is_rar = content.startswith(b"Rar!")
     executable = shutil.which("7zz") or shutil.which("7z")
-    if not executable:
+    lsar = shutil.which("lsar") if is_rar else None
+    unar = shutil.which("unar") if is_rar else None
+    if not executable and not (lsar and unar):
         raise ZimukuError("zimuku_archive_tool_unavailable")
     suffix = Path(filename).suffix or (".rar" if content.startswith(b"Rar!") else ".7z")
     with TemporaryDirectory(prefix="zimuku-archive-") as temporary:
         temporary_path = Path(temporary)
         archive_path = temporary_path / f"download{suffix}"
         archive_path.write_bytes(content)
-        listed = _run_archive_tool([executable, "l", "-slt", str(archive_path)])
+        use_unar = bool(is_rar and lsar and unar)
+        if use_unar:
+            listed = _run_archive_tool([str(lsar), "-json", str(archive_path)])
+            entries = _parse_lsar_entries(listed.stdout)
+        else:
+            listed = _run_archive_tool([str(executable), "l", "-slt", str(archive_path)])
+            entries = _parse_archive_entries(listed.stdout, archive_path.name)
         entries = [
             (name, size)
-            for name, size in _parse_archive_entries(listed.stdout, archive_path.name)
+            for name, size in entries
             if Path(name).suffix.lower().lstrip(".") in SUPPORTED_FORMATS
         ]
         if len(entries) > MAX_ARCHIVE_MEMBERS:
@@ -1077,19 +1095,23 @@ def _extract_external_archive(
 
         extract_root = temporary_path / "extracted"
         extract_root.mkdir()
-        try:
+        if use_unar:
             _run_archive_tool(
-                [executable, "x", "-y", f"-o{extract_root}", str(archive_path)]
+                [str(unar), "-f", "-D", "-o", str(extract_root), str(archive_path)]
             )
-        except ZimukuError:
-            unar = shutil.which("unar") if content.startswith(b"Rar!") else None
-            if not unar:
-                raise
-            shutil.rmtree(extract_root)
-            extract_root.mkdir()
-            _run_archive_tool(
-                [unar, "-f", "-D", "-o", str(extract_root), str(archive_path)]
-            )
+        else:
+            try:
+                _run_archive_tool(
+                    [str(executable), "x", "-y", f"-o{extract_root}", str(archive_path)]
+                )
+            except ZimukuError:
+                if not unar:
+                    raise
+                shutil.rmtree(extract_root)
+                extract_root.mkdir()
+                _run_archive_tool(
+                    [unar, "-f", "-D", "-o", str(extract_root), str(archive_path)]
+                )
         resolved_root = extract_root.resolve()
         members: list[DownloadedSubtitleMember] = []
         total = 0
@@ -1152,6 +1174,28 @@ def _parse_archive_entries(output: str, archive_name: str) -> list[tuple[str, in
             except ValueError:
                 current_size = 0
     append_current()
+    return entries
+
+
+def _parse_lsar_entries(output: str) -> list[tuple[str, int]]:
+    try:
+        payload = json.loads(output)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ZimukuError("zimuku_archive_extract_failed") from error
+    contents = payload.get("lsarContents") if isinstance(payload, dict) else None
+    if not isinstance(contents, list):
+        raise ZimukuError("zimuku_archive_extract_failed")
+    entries: list[tuple[str, int]] = []
+    for item in contents:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("XADFileName") or "").strip()
+        try:
+            size = int(item.get("XADFileSize") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if name:
+            entries.append((name, size))
     return entries
 
 

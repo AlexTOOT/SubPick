@@ -108,11 +108,28 @@ docker compose up -d
 ## 更多文档
 
 - [Docker / NAS 部署](docs/deployment/nas-docker.md)
+- [字幕源搜索策略](docs/providers/search-strategy.md)
 - [Zimuku 与本地 OCR](docs/providers/zimuku.md)
+- [字幕校验与对轴流程](docs/workflows/subtitle-alignment.md)
 - [Provider Adapter 接口](docs/provider-adapter-api.md)
+- [发布与更新策略](docs/architecture/release-and-update-strategy.md)
 - [路线图](ROADMAP.md)
 
 ## 许可证
 
 拾幕使用 [GNU GPL v3 或更高版本](LICENSE) 发布。字幕内容及字幕站点服务受各自条款
 约束，请仅下载和使用你有权访问的内容。
+
+## 参考与致谢
+
+拾幕的设计和实现参考或使用了以下项目与服务：
+
+- 工作流与媒体库：[MoviePilot](https://github.com/jxxghp/MoviePilot)、[MoviePilot Plugins](https://github.com/jxxghp/MoviePilot-Plugins)、[Jellyfin](https://github.com/jellyfin/jellyfin)
+- 项目经验：[ChineseSubFinder](https://github.com/ChineseSubFinder/ChineseSubFinder)、[Bazarr](https://github.com/morpheus65535/bazarr)
+- 字幕与对轴组件：[Subliminal](https://github.com/Diaoul/subliminal)、[ffsubsync](https://github.com/smacke/ffsubsync)
+- 媒体与压缩工具：[FFmpeg](https://github.com/FFmpeg/FFmpeg)、[MKVToolNix](https://gitlab.com/mbunkus/mkvtoolnix)、[7-Zip](https://github.com/ip7z/7zip)、[The Unarchiver](https://github.com/MacPaw/XADMaster)
+- 验证码识别：[MoviePilot OCR](https://github.com/jxxghp/MoviePilot-OCR)
+- 字幕服务：[ASSRT](https://assrt.net/)、[SubDL](https://subdl.com/)、[Zimuku](https://zimuku.org/)、[OpenSubtitles](https://www.opensubtitles.org/)、[OpenSubtitles.com](https://www.opensubtitles.com/)
+- 基础组件：[FastAPI](https://github.com/fastapi/fastapi)、[SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy)、[HTTPX](https://github.com/encode/httpx)、[Beautiful Soup](https://www.crummy.com/software/BeautifulSoup/)、[Pillow](https://github.com/python-pillow/Pillow)
+
+感谢这些项目的作者、维护者和字幕贡献者。
