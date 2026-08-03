@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from subtitle_sidecar.pipeline.scoring import (
     candidate_score_breakdown,
     candidate_mismatch_reason,
@@ -142,6 +144,52 @@ def test_prefers_matching_episode_over_wrong_episode() -> None:
     ranked = sort_candidates([wrong, matching], season=1, episode=2)
 
     assert ranked == [matching, wrong]
+
+
+def test_matching_season_pack_scores_two_points_above_exact_episode() -> None:
+    season_pack = candidate("zh-cn", False, "Show 第二季全集")
+    exact_episode = candidate("zh-cn", False, "Show.S02E03.1080p.WEB-DL")
+
+    pack_breakdown = candidate_score_breakdown(season_pack, season=2, episode=3)
+    episode_breakdown = candidate_score_breakdown(exact_episode, season=2, episode=3)
+
+    assert pack_breakdown["episode_score"] == 42
+    assert episode_breakdown["episode_score"] == 40
+    assert sort_candidates(
+        [exact_episode, season_pack],
+        season=2,
+        episode=3,
+    ) == [season_pack, exact_episode]
+
+
+@pytest.mark.parametrize(
+    ("provider", "release"),
+    [
+        ("zimuku", "Show 第二季全集"),
+        ("assrt", "Show.S02.Complete"),
+        ("subdl", "Show Season 2 Complete"),
+        ("subliminal:opensubtitlescom", "Show.S02.1080p.WEB-DL"),
+    ],
+)
+def test_matching_season_pack_bonus_is_shared_by_all_adapters(
+    provider: str,
+    release: str,
+) -> None:
+    season_pack = SubtitleCandidate(
+        provider=provider,
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title=release,
+        source_url=f"https://example.invalid/{provider}",
+        release_info=release,
+        confidence=0.5,
+        raw_metadata={},
+    )
+
+    breakdown = candidate_score_breakdown(season_pack, season=2, episode=3)
+
+    assert breakdown["episode_score"] == 42
 
 
 def test_episode_mismatch_reason_rejects_explicit_other_season_or_episode() -> None:

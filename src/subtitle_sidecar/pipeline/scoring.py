@@ -16,6 +16,7 @@ PROVIDER_QUALITY_WINDOW = 0.05
 RELEASE_MATCH_BONUS = 25
 RELEASE_MISMATCH_PENALTY = 12
 EPISODE_MATCH_BONUS = 40
+SEASON_PACK_MATCH_BONUS = 42
 EPISODE_MISMATCH_PENALTY = 40
 FEATURE_RUNTIME_SECONDS = 75 * 60
 EPISODE_YEAR_MISMATCH_YEARS = 4
@@ -322,11 +323,11 @@ def _release_match_score(candidate: SubtitleCandidate, video_path: Path) -> floa
 
 def _episode_match_score(candidate: SubtitleCandidate, season: int, episode: int) -> float:
     text = f"{candidate.release_info} {candidate.title}".casefold()
-    expected = f"s{season:02d}e{episode:02d}"
-    _seasons, detected_episodes = _episode_markers(text)
-    episode_codes = set(re.findall(r"s\d{1,2}e\d{1,2}", text))
-    if expected in episode_codes:
+    detected_seasons, detected_episodes = _episode_markers(text)
+    if season in detected_seasons and episode in detected_episodes:
         return EPISODE_MATCH_BONUS
+    if season in detected_seasons and not detected_episodes:
+        return SEASON_PACK_MATCH_BONUS
     return -EPISODE_MISMATCH_PENALTY if detected_episodes else 0.0
 
 
