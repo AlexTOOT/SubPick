@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from subtitle_sidecar.pipeline.scoring import (
+    candidate_score_breakdown,
     candidate_mismatch_reason,
     episode_mismatch_reason,
     score_candidate,
@@ -52,6 +53,30 @@ def test_bilingual_is_preferred_when_provider_quality_is_close() -> None:
     bilingual = candidate("zh-cn", True, provider_quality=0.80)
 
     assert sort_candidates([plain, bilingual]) == [bilingual, plain]
+
+
+def test_score_breakdown_explains_total_and_conditional_bilingual_bonus() -> None:
+    subtitle = candidate("zh-cn", True, provider_quality=0.8)
+
+    breakdown = candidate_score_breakdown(
+        subtitle,
+        provider_quality_reference=0.82,
+    )
+
+    assert breakdown["provider_quality_score"] == 80
+    assert breakdown["bilingual_bonus_applied"] is True
+    assert breakdown["bilingual_score"] == 6
+    assert breakdown["language_score"] == 2
+    assert breakdown["confidence_score"] == 5
+    assert breakdown["total_score"] == 93
+
+    low_quality = candidate("zh-cn", True, provider_quality=0.4)
+    low_breakdown = candidate_score_breakdown(
+        low_quality,
+        provider_quality_reference=0.82,
+    )
+    assert low_breakdown["bilingual_bonus_applied"] is False
+    assert low_breakdown["bilingual_score"] == 0
 
 
 def test_confidence_affects_score_within_same_language_bucket() -> None:

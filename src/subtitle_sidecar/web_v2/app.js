@@ -906,6 +906,8 @@ async function openTask(taskId) {
 }
 
 function renderTaskDetail(task) {
+  const taskEvents = task.events || [];
+  const discovery = renderCandidateDiscovery(taskEvents);
   const candidates = (task.candidates || []).map((candidate) => {
     const title = escapeHtml(candidate.title || "未命名候选");
     const sourceUrl = safeExternalUrl(candidate.source_url);
@@ -914,7 +916,9 @@ function renderTaskDetail(task) {
       : title;
     return `<div class="candidate-row"><strong>${link}</strong><p class="secondary">${escapeHtml(candidate.provider)} · ${escapeHtml(candidate.language)} · 分数 ${escapeHtml(candidate.score ?? "—")}</p>${candidate.last_error_message ? `<p>${escapeHtml(candidate.last_error_message)}</p>` : ""}</div>`;
   }).join("") || '<p class="empty">暂无候选字幕</p>';
-  const events = (task.events || []).slice().reverse().map((event) => `
+  const events = taskEvents
+    .filter((event) => !["candidate_results", "candidate_ranking"].includes(event.stage))
+    .slice().reverse().map((event) => `
     <div class="event-row"><time>${escapeHtml(formatTime(event.created_at))}</time><strong>${escapeHtml(statusLabel(event.stage))} · ${escapeHtml(statusLabel(event.status))}</strong><p>${escapeHtml(event.message || event.error_code || "无详细信息")}</p></div>
   `).join("") || '<p class="empty">暂无处理日志</p>';
   const artifacts = (task.artifacts || []).map((artifact) => `
@@ -936,7 +940,8 @@ function renderTaskDetail(task) {
       <div><span>原始路径</span><strong>${escapeHtml(task.video_path_original)}</strong></div>
       <div><span>解析路径</span><strong>${escapeHtml(task.video_path_resolved || "尚未解析")}</strong></div>
     </div>
-    <section class="drawer-section"><h3>候选字幕</h3><div class="candidate-list">${candidates}</div></section>
+    <section class="drawer-section"><h3>搜索结果与排序</h3>${discovery}</section>
+    <section class="drawer-section"><h3>已尝试候选</h3><div class="candidate-list">${candidates}</div></section>
     <section class="drawer-section"><h3>处理日志</h3><div class="event-list">${events}</div></section>
     <section class="drawer-section"><h3>字幕产物</h3><div class="candidate-list">${artifacts}</div></section>
   `;
@@ -1556,6 +1561,109 @@ function renderDiagnostics() {
       </dl>
     </details>
   `;
+}
+
+function renderCandidateDiscovery(events) {
+  const resultEvents = events.filter((event) => event.stage === "candidate_results");
+  const rankingEvents = events.filter((event) => event.stage === "candidate_ranking");
+  if (!resultEvents.length && !rankingEvents.length) {
+    return '<p class="empty">该任务尚无候选清单</p>';
+  }
+
+  const rankings = rankingEvents.map((event) => {
+    const details = event.details || {};
+    const provider = details.provider || "未知来源";
+    const rows = (details.candidates || []).map((candidate) => renderDiscoveredCandidate(candidate, true)).join("");
+    return `
+      <article class="candidate-batch">
+        <header><strong>${escapeHtml(provider)}</strong><span>${escapeHtml(details.candidate_count || 0)} 条可用 · 尝试上限 ${escapeHtml(details.attempt_limit ?? "—")}</span></header>
+        <div class="candidate-list">${rows || '<p class="empty">筛选后无可用候选</p>'}</div>
+      </article>
+    `;
+  }).join("");
+
+  const originals = resultEvents.map((event) => {
+    const details = event.details || {};
+    const rows = (details.candidates || []).map((candidate) => renderDiscoveredCandidate(candidate, false)).join("");
+    return `
+      <article class="candidate-batch candidate-original-batch">
+        <header><strong>${escapeHtml(details.provider || "未知来源")}</strong><span>${escapeHtml(details.candidate_count || 0)} 条</span></header>
+        <div class="candidate-list">${rows}</div>
+      </article>
+    `;
+  }).join("");
+
+  return `
+    <div class="candidate-discovery">${rankings || '<p class="empty">没有候选通过筛选</p>'}</div>
+    <details class="candidate-original-results">
+      <summary>查看字幕源原始返回顺序（${resultEvents.reduce((total, event) => total + Number(event.details?.candidate_count || 0), 0)} 条）</summary>
+      <div class="candidate-discovery">${originals}</div>
+    </details>
+  `;
+}
+
+function renderDiscoveredCandidate(candidate, ranked) {
+  const title = escapeHtml(candidate.title || "未命名候选");
+  const sourceUrl = safeExternalUrl(candidate.source_url);
+  const link = sourceUrl
+    ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+    : title;
+  const order = ranked ? `#${candidate.rank || "—"}` : `原始 #${candidate.position || "—"}`;
+  const attributes = [
+    candidate.language,
+    candidate.is_bilingual ? "双语" : null,
+    candidate.format ? String(candidate.format).toUpperCase() : null,
+  ].filter(Boolean).join(" · ");
+  const metrics = candidateMetricText(candidate);
+  const breakdown = ranked ? scoreBreakdownText(candidate.score_breakdown) : "";
+  return `
+    <div class="candidate-row candidate-ranked-row">
+      <span class="candidate-rank">${escapeHtml(order)}</span>
+      <div>
+        <strong>${link}</strong>
+        <p class="secondary">${escapeHtml(attributes || candidate.provider || "未知信息")}</p>
+        ${candidate.release_info ? `<p class="candidate-release">${escapeHtml(candidate.release_info)}</p>` : ""}
+        ${metrics ? `<p class="candidate-metrics">${escapeHtml(metrics)}</p>` : ""}
+        ${breakdown ? `<p class="candidate-breakdown">${escapeHtml(breakdown)}</p>` : ""}
+      </div>
+      ${ranked ? `<strong class="candidate-score">${escapeHtml(formatCandidateScore(candidate.score))}</strong>` : ""}
+    </div>
+  `;
+}
+
+function candidateMetricText(candidate) {
+  const metrics = [];
+  if (candidate.provider_quality != null) metrics.push(`站内质量 ${(Number(candidate.provider_quality) * 100).toFixed(1)}`);
+  if (candidate.assrt_downloads != null) metrics.push(`下载 ${candidate.assrt_downloads}`);
+  if (candidate.assrt_views != null) metrics.push(`浏览 ${candidate.assrt_views}`);
+  if (candidate.assrt_vote_score != null) metrics.push(`评分 ${candidate.assrt_vote_score}`);
+  if (candidate.zimuku_downloads != null) metrics.push(`下载 ${candidate.zimuku_downloads}`);
+  if (candidate.zimuku_quality != null) metrics.push(`评分 ${candidate.zimuku_quality}`);
+  return metrics.join(" · ");
+}
+
+function scoreBreakdownText(breakdown) {
+  if (!breakdown) return "";
+  const parts = [];
+  if (breakdown.provider_quality_score) parts.push(`站内质量 +${formatCandidateScore(breakdown.provider_quality_score)}`);
+  if (breakdown.bilingual_score) parts.push(`双语 +${formatCandidateScore(breakdown.bilingual_score)}`);
+  if (breakdown.language_score) parts.push(`语言 +${formatCandidateScore(breakdown.language_score)}`);
+  if (breakdown.confidence_score) parts.push(`来源置信 +${formatCandidateScore(breakdown.confidence_score)}`);
+  if (breakdown.release_score) parts.push(`版本 ${signedCandidateScore(breakdown.release_score)}`);
+  if (breakdown.episode_score) parts.push(`季集 ${signedCandidateScore(breakdown.episode_score)}`);
+  return parts.join(" · ");
+}
+
+function formatCandidateScore(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
+function signedCandidateScore(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return `${number > 0 ? "+" : ""}${formatCandidateScore(number)}`;
 }
 
 function checked(value) {

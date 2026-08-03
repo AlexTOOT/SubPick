@@ -1407,6 +1407,54 @@ def test_lazy_batches_stop_after_first_provider_candidate_succeeds(tmp_path: Pat
     assert low.download_calls == []
 
 
+def test_candidate_results_and_rankings_are_recorded_for_task_details(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.Name.2024.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    repository = FakeRepository(task)
+    provider = FakeProvider(name="assrt")
+    returned_first = replace(
+        _provider_candidate("assrt", "first"),
+        provider_quality=0.2,
+        raw_metadata={"subtitle_id": "first", "assrt_downloads": 2},
+    )
+    ranked_first = replace(
+        _provider_candidate("assrt", "second"),
+        provider_quality=0.9,
+        raw_metadata={"subtitle_id": "second", "assrt_downloads": 900},
+    )
+    registry = LazyBatchRegistry(
+        [provider],
+        [("assrt", [returned_first, ranked_first])],
+    )
+    orchestrator = SubtitleOrchestrator(
+        settings=_retry_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=registry,
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    results = next(
+        event for event in repository.task_events if event["stage"] == "candidate_results"
+    )
+    ranking = next(
+        event for event in repository.task_events if event["stage"] == "candidate_ranking"
+    )
+    assert [item["title"] for item in results["details"]["candidates"]] == [
+        returned_first.title,
+        ranked_first.title,
+    ]
+    assert [item["title"] for item in ranking["details"]["candidates"]] == [
+        ranked_first.title,
+        returned_first.title,
+    ]
+    assert ranking["details"]["candidates"][0]["assrt_downloads"] == 900
+    assert ranking["details"]["candidates"][0]["score_breakdown"]["total_score"] == ranking["details"]["candidates"][0]["score"]
+    assert provider.download_calls[0][0] == ranked_first
+
+
 def test_lazy_batches_resume_lower_provider_after_first_batch_fails(tmp_path: Path) -> None:
     video = tmp_path / "Movie.Name.2024.mkv"
     video.write_bytes(b"video")

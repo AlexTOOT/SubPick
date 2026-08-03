@@ -29,30 +29,68 @@ def score_candidate(
     episode: int | None = None,
     provider_quality_reference: float | None = None,
 ) -> float:
-    score = 0.0
+    return candidate_score_breakdown(
+        candidate,
+        video_path=video_path,
+        season=season,
+        episode=episode,
+        provider_quality_reference=provider_quality_reference,
+    )["total_score"]
+
+
+def candidate_score_breakdown(
+    candidate: SubtitleCandidate,
+    *,
+    video_path: Path | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+    provider_quality_reference: float | None = None,
+) -> dict[str, float | bool | None]:
+    """Return the transparent scoring signals used to rank one adapter batch."""
     language = _normalize_language(candidate.language)
     provider_quality = _normalized_provider_quality(candidate.provider_quality)
-
-    if provider_quality is not None:
-        score += provider_quality * PROVIDER_QUALITY_MULTIPLIER
-
-    if candidate.is_bilingual and _quality_is_comparable(
+    provider_quality_score = (
+        provider_quality * PROVIDER_QUALITY_MULTIPLIER
+        if provider_quality is not None
+        else 0.0
+    )
+    bilingual_bonus_applied = candidate.is_bilingual and _quality_is_comparable(
         provider_quality,
         provider_quality_reference,
-    ):
-        score += BILINGUAL_BONUS
-
+    )
+    bilingual_score = float(BILINGUAL_BONUS if bilingual_bonus_applied else 0)
+    language_score = 0.0
     if language == "zh-cn":
-        score += SIMPLIFIED_BONUS
+        language_score = float(SIMPLIFIED_BONUS)
     elif language == "zh-hant":
-        score += TRADITIONAL_BONUS
-
-    score += candidate.confidence * CONFIDENCE_MULTIPLIER
-    if video_path is not None:
-        score += _release_match_score(candidate, video_path)
-    if season is not None and episode is not None:
-        score += _episode_match_score(candidate, season, episode)
-    return score
+        language_score = float(TRADITIONAL_BONUS)
+    confidence_score = candidate.confidence * CONFIDENCE_MULTIPLIER
+    release_score = _release_match_score(candidate, video_path) if video_path is not None else 0.0
+    episode_score = (
+        _episode_match_score(candidate, season, episode)
+        if season is not None and episode is not None
+        else 0.0
+    )
+    total_score = (
+        provider_quality_score
+        + bilingual_score
+        + language_score
+        + confidence_score
+        + release_score
+        + episode_score
+    )
+    return {
+        "provider_quality": provider_quality,
+        "provider_quality_reference": provider_quality_reference,
+        "provider_quality_score": provider_quality_score,
+        "bilingual_bonus_applied": bilingual_bonus_applied,
+        "bilingual_score": bilingual_score,
+        "language_score": language_score,
+        "confidence_score": confidence_score,
+        "release_score": release_score,
+        "episode_score": episode_score,
+        "total_score": total_score,
+    }
 
 
 def sort_candidates(

@@ -18,6 +18,7 @@ from subtitle_sidecar.pipeline.candidate_identity import (
 )
 from subtitle_sidecar.pipeline.naming import build_subtitle_path
 from subtitle_sidecar.pipeline.scoring import (
+    candidate_score_breakdown,
     candidate_mismatch_reason,
     provider_quality_reference,
     score_candidate,
@@ -387,6 +388,7 @@ class SubtitleOrchestrator:
         attempt_budget: int,
     ) -> tuple[bool, int, str | None]:
         task_id = task.id
+        self._record_candidate_results(task_id, candidates)
         compatible_candidates = []
         mismatch_counts: dict[str, int] = {}
         reason_labels = {
@@ -456,12 +458,23 @@ class SubtitleOrchestrator:
             task,
             compatible_candidates,
         )
-        ranked_candidates = sort_candidates(
+        all_ranked_candidates = sort_candidates(
             compatible_candidates,
             video_path=resolved_path,
             season=task.season,
             episode=task.episode,
-        )[: max(0, attempt_budget - attempts_used)]
+        )
+        remaining_attempts = max(0, attempt_budget - attempts_used)
+        self._record_candidate_ranking(
+            task_id,
+            all_ranked_candidates,
+            compatible_candidates=compatible_candidates,
+            resolved_path=resolved_path,
+            season=task.season,
+            episode=task.episode,
+            attempt_limit=remaining_attempts,
+        )
+        ranked_candidates = all_ranked_candidates[:remaining_attempts]
         last_failure_reason: str | None = None
         batch_attempts = 0
 
@@ -862,6 +875,119 @@ class SubtitleOrchestrator:
             return True, batch_attempts, None
 
         return False, batch_attempts, last_failure_reason
+
+    def _record_candidate_results(
+        self,
+        task_id: int,
+        candidates: list[SubtitleCandidate],
+    ) -> None:
+        if not candidates:
+            return
+        provider = candidates[0].provider.split(":", 1)[0]
+        self._record_task_event(
+            task_id,
+            "candidate_results",
+            "completed",
+            message=f"字幕源 {provider} 返回 {len(candidates)} 条候选",
+            details={
+                "provider": provider,
+                "candidate_count": len(candidates),
+                "candidates": [
+                    self._candidate_snapshot(candidate, position=index)
+                    for index, candidate in enumerate(candidates, start=1)
+                ],
+            },
+        )
+
+    def _record_candidate_ranking(
+        self,
+        task_id: int,
+        candidates: list[SubtitleCandidate],
+        *,
+        compatible_candidates: list[SubtitleCandidate],
+        resolved_path: Path,
+        season: int | None,
+        episode: int | None,
+        attempt_limit: int,
+    ) -> None:
+        if not candidates:
+            return
+        provider = candidates[0].provider.split(":", 1)[0]
+        snapshots: list[dict[str, Any]] = []
+        for rank, candidate in enumerate(candidates, start=1):
+            breakdown = candidate_score_breakdown(
+                candidate,
+                video_path=resolved_path,
+                season=season,
+                episode=episode,
+                provider_quality_reference=provider_quality_reference(
+                    compatible_candidates,
+                    candidate,
+                ),
+            )
+            snapshots.append(
+                self._candidate_snapshot(
+                    candidate,
+                    rank=rank,
+                    score_breakdown={
+                        key: round(value, 4) if isinstance(value, float) else value
+                        for key, value in breakdown.items()
+                    },
+                )
+            )
+        self._record_task_event(
+            task_id,
+            "candidate_ranking",
+            "completed",
+            message=(
+                f"SubPick 排序完成：{len(candidates)} 条可用候选，"
+                f"本轮最多尝试 {min(len(candidates), attempt_limit)} 条"
+            ),
+            details={
+                "provider": provider,
+                "candidate_count": len(candidates),
+                "attempt_limit": attempt_limit,
+                "candidates": snapshots,
+            },
+        )
+
+    @staticmethod
+    def _candidate_snapshot(
+        candidate: SubtitleCandidate,
+        *,
+        position: int | None = None,
+        rank: int | None = None,
+        score_breakdown: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        snapshot: dict[str, Any] = {
+            "provider": candidate.provider,
+            "title": candidate.title,
+            "source_url": candidate.source_url,
+            "language": candidate.language,
+            "is_bilingual": candidate.is_bilingual,
+            "format": candidate.format,
+            "release_info": candidate.release_info,
+            "confidence": candidate.confidence,
+            "provider_quality": candidate.provider_quality,
+        }
+        if position is not None:
+            snapshot["position"] = position
+        if rank is not None:
+            snapshot["rank"] = rank
+        if score_breakdown is not None:
+            snapshot["score"] = score_breakdown["total_score"]
+            snapshot["score_breakdown"] = score_breakdown
+        for key in (
+            "assrt_downloads",
+            "assrt_views",
+            "assrt_vote_score",
+            "zimuku_downloads",
+            "zimuku_quality",
+        ):
+            value = candidate.raw_metadata.get(key)
+            if value is not None:
+                snapshot[key] = value
+        return snapshot
 
     def _exclude_previous_retry_candidates(
         self,
