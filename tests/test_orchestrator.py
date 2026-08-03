@@ -1096,6 +1096,36 @@ def test_provider_search_event_records_and_describes_search_context(tmp_path: Pa
     assert "文件名“Movie.2025.mkv”" in event["message"]
 
 
+def test_provider_search_progress_releases_database_writer_before_next_request(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "Movie.2025.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    repository = FakeRepository(task)
+    commits: list[None] = []
+    repository.session = SimpleNamespace(commit=lambda: commits.append(None))
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([], []),
+    )
+
+    orchestrator._record_provider_search_report(
+        task.id,
+        ProviderSearchReport(
+            provider="zimuku",
+            status="progress",
+            candidate_count=0,
+            reason="Movie 2025",
+        ),
+    )
+
+    assert commits == [None]
+    assert repository.task_events[-1]["stage"] == "provider_search"
+
+
 def test_successful_candidate_validates_places_and_records_artifact(tmp_path: Path) -> None:
     video = tmp_path / "Movie.Name.2024.mkv"
     video.write_bytes(b"video")

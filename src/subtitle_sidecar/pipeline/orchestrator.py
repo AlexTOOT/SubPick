@@ -1330,6 +1330,9 @@ class SubtitleOrchestrator:
             error_code="provider_search_failed" if report.status == "failed" else None,
             details=details,
         )
+        # A provider can emit progress and immediately start another slow HTTP request.
+        # Persist the report now so that SQLite's single writer is not held while waiting.
+        self._release_database_lock()
 
     def _record_provider_wait(
         self,
