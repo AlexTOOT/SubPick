@@ -673,7 +673,7 @@ def _season_title_query(title: str, season: int) -> str:
 def _episode_title_query(title: str, season: int, episode: int) -> str:
     if re.search(r"[\u3400-\u9fff]", title):
         return (
-            f"{title} 第{_format_chinese_number(season)}季 "
+            f"{title} 第{_format_chinese_number(season)}季"
             f"第{_format_chinese_number(episode)}集"
         )
     return f"{title} Season {season} Episode {episode}"
