@@ -375,7 +375,6 @@ function initializeSetupWizard() {
   const wizard = state.setupWizard;
   if (wizard.initialized) return;
   const subliminal = state.providerSettings.subliminal || {};
-  const opensubtitles = subliminal.authentication?.opensubtitles || {};
   const opensubtitlescom = subliminal.authentication?.opensubtitlescom || {};
   const savedPage = Number(window.localStorage.getItem("subpick-setup-page-v2"));
   const restoredPage = Number.isInteger(savedPage) && savedPage >= 0 && savedPage <= 4 ? savedPage : 0;
@@ -394,11 +393,6 @@ function initializeSetupWizard() {
     jellyfinKey: "",
     zimukuEnabled: state.providerSettings.zimuku?.enabled ?? true,
     subliminalEnabled: Boolean(subliminal.enabled),
-    opensubtitlesEnabled: !subliminal.enabled || (subliminal.providers || []).includes("opensubtitles"),
-    opensubtitlesUsername: opensubtitles.username || "",
-    opensubtitlesPassword: "",
-    opensubtitlesPasswordConfigured: Boolean(opensubtitles.password_configured),
-    opensubtitlescomEnabled: Boolean(subliminal.enabled && (subliminal.providers || []).includes("opensubtitlescom")),
     opensubtitlescomUsername: opensubtitlescom.username || "",
     opensubtitlescomPassword: "",
     opensubtitlescomApiKey: "",
@@ -470,16 +464,8 @@ function setupProvidersPageHtml(draft) {
       </section>
       <section class="setup-provider ${draft.subliminalEnabled ? "" : "is-disabled"}" data-setup-provider="subliminal">
         <label><input id="setup-subliminal-enabled" type="checkbox" ${checked(draft.subliminalEnabled)}>Subliminal</label>
-        <small>通用字幕来源。OpenSubtitles 可匿名使用，但额度较低。</small>
+        <small>通过 OpenSubtitles.com 搜索字幕；启用后必须完成账户认证。</small>
         <div class="setup-provider-fields">
-          <div class="option-row">
-            <label><input id="setup-opensubtitles-enabled" type="checkbox" ${checked(draft.opensubtitlesEnabled)}>OpenSubtitles</label>
-            <label><input id="setup-opensubtitlescom-enabled" type="checkbox" ${checked(draft.opensubtitlescomEnabled)}>OpenSubtitles.com</label>
-          </div>
-          <div class="setup-source-fields" data-setup-source="opensubtitles">
-            <label>OpenSubtitles 用户名（建议填写）<input id="setup-opensubtitles-username" value="${escapeHtml(draft.opensubtitlesUsername)}" autocomplete="off"></label>
-            <label>OpenSubtitles 密码<input id="setup-opensubtitles-password" type="password" value="${escapeHtml(draft.opensubtitlesPassword)}" autocomplete="new-password">${setupSecretHint(draft.opensubtitlesPasswordConfigured)}</label>
-          </div>
           <div class="setup-source-fields" data-setup-source="opensubtitlescom">
             <p><a href="https://www.opensubtitles.com/en/users/sign_up" target="_blank" rel="noreferrer">注册 OpenSubtitles.com</a>，并在 <a href="https://www.opensubtitles.com/en/consumers" target="_blank" rel="noreferrer">API Consumers</a> 获取 API Key。该来源必须完成认证。</p>
             <label>OpenSubtitles.com 用户名<input id="setup-opensubtitlescom-username" value="${escapeHtml(draft.opensubtitlescomUsername)}" autocomplete="off"></label>
@@ -512,10 +498,6 @@ function collectSetupWizardPage() {
   } else if (page === 2) {
     draft.zimukuEnabled = $("#setup-zimuku-enabled")?.checked === true;
     draft.subliminalEnabled = $("#setup-subliminal-enabled")?.checked === true;
-    draft.opensubtitlesEnabled = $("#setup-opensubtitles-enabled")?.checked ?? draft.opensubtitlesEnabled;
-    draft.opensubtitlescomEnabled = $("#setup-opensubtitlescom-enabled")?.checked ?? draft.opensubtitlescomEnabled;
-    draft.opensubtitlesUsername = $("#setup-opensubtitles-username")?.value.trim() ?? draft.opensubtitlesUsername;
-    draft.opensubtitlesPassword = $("#setup-opensubtitles-password")?.value || draft.opensubtitlesPassword;
     draft.opensubtitlescomUsername = $("#setup-opensubtitlescom-username")?.value.trim() ?? draft.opensubtitlescomUsername;
     draft.opensubtitlescomPassword = $("#setup-opensubtitlescom-password")?.value || draft.opensubtitlescomPassword;
     draft.opensubtitlescomApiKey = $("#setup-opensubtitlescom-apikey")?.value || draft.opensubtitlescomApiKey;
@@ -579,10 +561,7 @@ async function saveSetupProviders() {
   if (![draft.zimukuEnabled, draft.subliminalEnabled, draft.assrtEnabled, draft.subdlEnabled].some(Boolean)) {
     throw validationError("请至少启用一个字幕来源", [".setup-provider-list"]);
   }
-  if (draft.subliminalEnabled && !draft.opensubtitlesEnabled && !draft.opensubtitlescomEnabled) {
-    throw validationError("启用 Subliminal 时至少选择一个字幕源", ['[data-setup-provider="subliminal"] .option-row']);
-  }
-  if (draft.opensubtitlescomEnabled && draft.subliminalEnabled) {
+  if (draft.subliminalEnabled) {
     const complete = draft.opensubtitlescomUsername
       && (draft.opensubtitlescomPassword || draft.opensubtitlescomPasswordConfigured)
       && (draft.opensubtitlescomApiKey || draft.opensubtitlescomApiKeyConfigured);
@@ -620,10 +599,8 @@ async function saveSetupProviders() {
   state.providerSettings.zimuku = zimuku;
 
   const authentication = {
-    opensubtitles: { username: draft.opensubtitlesUsername },
     opensubtitlescom: { username: draft.opensubtitlescomUsername },
   };
-  if (draft.opensubtitlesPassword) authentication.opensubtitles.password = draft.opensubtitlesPassword;
   if (draft.opensubtitlescomPassword) authentication.opensubtitlescom.password = draft.opensubtitlescomPassword;
   if (draft.opensubtitlescomApiKey) authentication.opensubtitlescom.apikey = draft.opensubtitlescomApiKey;
   setSetupStatus("正在保存 Subliminal…");
@@ -632,7 +609,7 @@ async function saveSetupProviders() {
     ({ payload: subliminal } = await api("/api/v1/providers/subliminal/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
         enabled: draft.subliminalEnabled,
-        providers: [draft.opensubtitlesEnabled && "opensubtitles", draft.opensubtitlescomEnabled && "opensubtitlescom"].filter(Boolean),
+        providers: draft.subliminalEnabled ? ["opensubtitlescom"] : [],
         languages: ["zh-cn", "zh-hant"],
         authentication,
       }),
@@ -775,19 +752,6 @@ function syncSetupProviderFieldStates() {
     provider.classList.toggle("is-disabled", !enabled);
     provider.querySelectorAll(".setup-provider-fields input, .setup-provider-fields select, .setup-provider-fields textarea")
       .forEach((control) => { control.disabled = !enabled; });
-  });
-
-  const subliminal = $('[data-setup-provider="subliminal"]', $("#setup-dialog-body"));
-  const subliminalEnabled = $("#setup-subliminal-enabled")?.checked === true;
-  [
-    ["opensubtitles", "#setup-opensubtitles-enabled"],
-    ["opensubtitlescom", "#setup-opensubtitlescom-enabled"],
-  ].forEach(([source, toggleSelector]) => {
-    const fields = subliminal?.querySelector(`[data-setup-source="${source}"]`);
-    if (!fields) return;
-    const enabled = subliminalEnabled && $(toggleSelector)?.checked === true;
-    fields.classList.toggle("is-disabled", !enabled);
-    fields.querySelectorAll("input, select, textarea").forEach((control) => { control.disabled = !enabled; });
   });
 }
 
@@ -1718,30 +1682,19 @@ function providerSettingsHtml(name) {
   const settings = state.providerSettings[name] || {};
   if (name === "subliminal") {
     const authentication = settings.authentication || {};
-    const opensubtitles = authentication.opensubtitles || {};
     const opensubtitlescom = authentication.opensubtitlescom || {};
     return `
       <div class="provider-form-grid">
         <label class="toggle-row"><input data-setting="enabled" type="checkbox" ${checked(settings.enabled)}>启用 Subliminal</label>
         <fieldset>
           <legend>支持中文的字幕源</legend>
-          <div class="option-row">
-            <label><input data-subliminal-source="opensubtitles" type="checkbox" ${checked((settings.providers || []).includes("opensubtitles"))}>OpenSubtitles</label>
-            <label><input data-subliminal-source="opensubtitlescom" type="checkbox" ${checked((settings.providers || []).includes("opensubtitlescom"))}>OpenSubtitles.com</label>
-          </div>
+          <div class="option-row"><span>OpenSubtitles.com</span></div>
         </fieldset>
         <fieldset>
           <legend>语言</legend>
           <div class="option-row">
             <label><input data-subliminal-language="zh-cn" type="checkbox" ${checked((settings.languages || []).includes("zh-cn"))}>简体中文</label>
             <label><input data-subliminal-language="zh-hant" type="checkbox" ${checked((settings.languages || []).includes("zh-hant"))}>繁体中文</label>
-          </div>
-        </fieldset>
-        <fieldset class="credential-block">
-          <legend>OpenSubtitles</legend>
-          <div class="compact-grid">
-            <label>用户名<input data-auth="opensubtitles-username" value="${escapeHtml(opensubtitles.username || "")}" autocomplete="off"></label>
-            <label>密码<input data-auth="opensubtitles-password" type="password" autocomplete="new-password">${secretStatus(opensubtitles.password_configured)}</label>
           </div>
         </fieldset>
         <fieldset class="credential-block">
@@ -2328,18 +2281,14 @@ function providerValidationIssue(name, card) {
   const enabled = providerInput(name, "enabled")?.checked === true;
   if (!enabled) return null;
   if (name === "subliminal") {
-    const sources = $$('[data-subliminal-source]', card).filter((node) => node.checked).map((node) => node.dataset.subliminalSource);
-    if (!sources.length) return { message: "启用 Subliminal 时至少选择一个字幕源", selectors: ["[data-subliminal-source]"] };
     const languages = $$('[data-subliminal-language]', card).filter((node) => node.checked);
     if (!languages.length) return { message: "请至少选择一种中文字幕语言", selectors: ["[data-subliminal-language]"] };
-    if (sources.includes("opensubtitlescom")) {
-      const auth = settings.authentication?.opensubtitlescom || {};
-      const missing = [];
-      if (!$('[data-auth="opensubtitlescom-username"]', card)?.value.trim()) missing.push('[data-auth="opensubtitlescom-username"]');
-      if (!$('[data-auth="opensubtitlescom-password"]', card)?.value && !auth.password_configured) missing.push('[data-auth="opensubtitlescom-password"]');
-      if (!$('[data-auth="opensubtitlescom-apikey"]', card)?.value && !auth.apikey_configured) missing.push('[data-auth="opensubtitlescom-apikey"]');
-      if (missing.length) return { message: "OpenSubtitles.com 必须填写用户名、密码和 API Key", selectors: missing };
-    }
+    const auth = settings.authentication?.opensubtitlescom || {};
+    const missing = [];
+    if (!$('[data-auth="opensubtitlescom-username"]', card)?.value.trim()) missing.push('[data-auth="opensubtitlescom-username"]');
+    if (!$('[data-auth="opensubtitlescom-password"]', card)?.value && !auth.password_configured) missing.push('[data-auth="opensubtitlescom-password"]');
+    if (!$('[data-auth="opensubtitlescom-apikey"]', card)?.value && !auth.apikey_configured) missing.push('[data-auth="opensubtitlescom-apikey"]');
+    if (missing.length) return { message: "OpenSubtitles.com 必须填写用户名、密码和 API Key", selectors: missing };
   }
   if (name === "assrt" && !providerValue(name, "token") && !settings.token_configured) {
     return { message: "启用 ASSRT 前请填写 API Key", selectors: ['[data-setting="token"]'] };
@@ -2376,11 +2325,9 @@ async function saveProviderSettings(name) {
   if (name === "subliminal") {
     const authValue = (key) => $(`[data-auth="${key}"]`, card)?.value || "";
     const authentication = {
-      opensubtitles: { username: authValue("opensubtitles-username").trim() },
       opensubtitlescom: { username: authValue("opensubtitlescom-username").trim() },
     };
     const secretFields = [
-      ["opensubtitles", "password", "opensubtitles-password"],
       ["opensubtitlescom", "password", "opensubtitlescom-password"],
       ["opensubtitlescom", "apikey", "opensubtitlescom-apikey"],
     ];
@@ -2390,7 +2337,7 @@ async function saveProviderSettings(name) {
     });
     body = {
       enabled: providerInput(name, "enabled")?.checked === true,
-      providers: $$("[data-subliminal-source]", card).filter((node) => node.checked).map((node) => node.dataset.subliminalSource),
+      providers: providerInput(name, "enabled")?.checked === true ? ["opensubtitlescom"] : [],
       languages: $$("[data-subliminal-language]", card).filter((node) => node.checked).map((node) => node.dataset.subliminalLanguage),
       authentication,
     };
@@ -2729,7 +2676,7 @@ function bindEvents() {
     navigateSetupWizardPage(Number(target.dataset.setupPage));
   });
   $("#setup-dialog-body").addEventListener("change", (event) => {
-    if (!event.target.matches("#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-opensubtitles-enabled, #setup-opensubtitlescom-enabled, #setup-assrt-enabled, #setup-subdl-enabled")) return;
+    if (!event.target.matches("#setup-zimuku-enabled, #setup-subliminal-enabled, #setup-assrt-enabled, #setup-subdl-enabled")) return;
     collectSetupWizardPage();
     syncSetupProviderFieldStates();
   });

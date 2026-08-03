@@ -132,7 +132,7 @@ docker compose up -d
 - 字幕与对轴组件：[Subliminal](https://github.com/Diaoul/subliminal)、[ffsubsync](https://github.com/smacke/ffsubsync)
 - 媒体与压缩工具：[FFmpeg](https://github.com/FFmpeg/FFmpeg)、[MKVToolNix](https://gitlab.com/mbunkus/mkvtoolnix)、[7-Zip](https://github.com/ip7z/7zip)、[The Unarchiver](https://github.com/MacPaw/XADMaster)
 - 验证码识别：[MoviePilot OCR](https://github.com/jxxghp/MoviePilot-OCR)
-- 字幕服务：[ASSRT](https://assrt.net/)、[SubDL](https://subdl.com/)、[Zimuku](https://zimuku.org/)、[OpenSubtitles](https://www.opensubtitles.org/)、[OpenSubtitles.com](https://www.opensubtitles.com/)
+- 字幕服务：[ASSRT](https://assrt.net/)、[SubDL](https://subdl.com/)、[Zimuku](https://zimuku.org/)、[OpenSubtitles.com](https://www.opensubtitles.com/)
 - 基础组件：[FastAPI](https://github.com/fastapi/fastapi)、[SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy)、[HTTPX](https://github.com/encode/httpx)、[Beautiful Soup](https://www.crummy.com/software/BeautifulSoup/)、[Pillow](https://github.com/python-pillow/Pillow)
 
 感谢这些项目的作者、维护者和字幕贡献者。

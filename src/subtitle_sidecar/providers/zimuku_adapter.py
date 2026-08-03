@@ -622,6 +622,19 @@ def _search_queries(request: SubtitleSearchRequest) -> list[_SearchQuery]:
             for title, source in titles:
                 queries.append(
                     _SearchQuery(
+                        value=_episode_title_query(
+                            title,
+                            request.season,
+                            request.episode,
+                        ),
+                        title=title,
+                        title_source=source,
+                        strategy="episode_localized",
+                    )
+                )
+            for title, source in titles:
+                queries.append(
+                    _SearchQuery(
                         value=f"{title} S{request.season:02d}E{request.episode:02d}",
                         title=title,
                         title_source=source,
@@ -655,6 +668,15 @@ def _season_title_query(title: str, season: int) -> str:
     if re.search(r"[\u3400-\u9fff]", title):
         return f"{title} 第{_format_chinese_number(season)}季"
     return f"{title} Season {season}"
+
+
+def _episode_title_query(title: str, season: int, episode: int) -> str:
+    if re.search(r"[\u3400-\u9fff]", title):
+        return (
+            f"{title} 第{_format_chinese_number(season)}季 "
+            f"第{_format_chinese_number(episode)}集"
+        )
+    return f"{title} Season {season} Episode {episode}"
 
 
 def _format_chinese_number(value: int) -> str:

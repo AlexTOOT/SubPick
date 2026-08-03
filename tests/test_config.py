@@ -85,10 +85,7 @@ def test_example_config_excludes_deprecated_library_paths_and_has_provider_block
     assert "libraries" not in payload["paths"]
     assert payload["providers"]["subliminal"]["enabled"] is False
     assert payload["providers"]["zimuku"]["enabled"] is True
-    assert payload["providers"]["subliminal"]["providers"] == [
-        "opensubtitles",
-        "opensubtitlescom",
-    ]
+    assert payload["providers"]["subliminal"]["providers"] == ["opensubtitlescom"]
     assert (
         payload["providers"]["zimuku"]["moviepilot_ocr_url"]
         == "http://moviepilot-ocr:9899"
@@ -108,7 +105,7 @@ def test_load_settings_reads_yaml_provider_settings(tmp_path: Path) -> None:
                 "  subliminal:",
                 "    enabled: true",
                 "    providers:",
-                "      - opensubtitles",
+                "      - opensubtitlescom",
                 "    languages:",
                 "      - zho",
                 "      - chi",
@@ -125,7 +122,7 @@ def test_load_settings_reads_yaml_provider_settings(tmp_path: Path) -> None:
     assert settings.server.token == "override-token"
     assert settings.providers.subliminal.enabled is True
     assert settings.providers.order == ["assrt", "subdl", "subliminal"]
-    assert settings.providers.subliminal.providers == ["opensubtitles"]
+    assert settings.providers.subliminal.providers == ["opensubtitlescom"]
     assert settings.providers.subliminal.languages == ["zho", "chi"]
     assert settings.queue.search_interval_seconds == 15.0
 
@@ -166,6 +163,21 @@ def test_legacy_db_setting_without_provider_list_keeps_defaults(tmp_path: Path) 
     assert merged.enabled is True
     assert merged.languages == ["zh-hant"]
     assert merged.providers == list(DEFAULT_SUBLIMINAL_PROVIDERS)
+
+
+def test_retired_opensubtitles_org_provider_is_removed_from_old_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  subliminal:\n    enabled: true\n    providers: [opensubtitles]\n"
+        "    authentication:\n      opensubtitles:\n        username: retired-user\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path=config_path, data_dir=tmp_path)
+
+    assert settings.providers.subliminal.enabled is False
+    assert settings.providers.subliminal.providers == []
+    assert settings.providers.subliminal.authentication == {}
 
 
 def test_provider_order_uses_persisted_app_setting_before_config(tmp_path: Path) -> None:

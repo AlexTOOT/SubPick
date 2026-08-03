@@ -749,6 +749,17 @@ def create_api_router() -> APIRouter:
         request: Request,
         payload: SubliminalProviderSettingsRequest,
     ) -> SubliminalProviderSettingsResponse:
+        requested_providers = [
+            provider.strip() for provider in payload.providers if provider.strip()
+        ]
+        unsupported = sorted(
+            provider for provider in requested_providers if provider != "opensubtitlescom"
+        )
+        if unsupported:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Subliminal 不再支持这些字幕源：{'、'.join(unsupported)}",
+            )
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
             existing = _load_subliminal_config(request, repo)
@@ -766,7 +777,7 @@ def create_api_router() -> APIRouter:
                 authentication[provider] = current
             saved = {
                 "enabled": payload.enabled,
-                "providers": [provider.strip() for provider in payload.providers if provider.strip()],
+                "providers": requested_providers,
                 "languages": [language.strip() for language in payload.languages if language.strip()],
                 "authentication": authentication,
             }

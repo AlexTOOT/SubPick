@@ -297,6 +297,8 @@ def test_episode_search_tries_localized_season_names_before_codes() -> None:
         ("Ted Season 2", "season_pack_localized"),
         ("泰迪熊 S02", "season_pack"),
         ("Ted S02", "season_pack"),
+        ("泰迪熊 第二季 第四集", "episode_localized"),
+        ("Ted Season 2 Episode 4", "episode_localized"),
         ("泰迪熊 S02E04", "episode_fallback"),
         ("Ted S02E04", "episode_fallback"),
     ]

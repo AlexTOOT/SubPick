@@ -2,15 +2,12 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import yaml
 
 
-DEFAULT_SUBLIMINAL_PROVIDERS = (
-    "opensubtitles",
-    "opensubtitlescom",
-)
+DEFAULT_SUBLIMINAL_PROVIDERS = ("opensubtitlescom",)
 DEFAULT_PROVIDER_ORDER = (
     "subliminal",
     "assrt",
@@ -110,6 +107,30 @@ class SubliminalProviderSettings(BaseModel):
     authentication: dict[str, SubliminalAuthenticationSettings] = Field(
         default_factory=dict
     )
+
+    @field_validator("providers", mode="before")
+    @classmethod
+    def keep_supported_providers(cls, value: Any) -> list[str]:
+        return [
+            provider
+            for provider in (value or [])
+            if str(provider).strip() in DEFAULT_SUBLIMINAL_PROVIDERS
+        ]
+
+    @field_validator("authentication", mode="before")
+    @classmethod
+    def keep_supported_authentication(cls, value: Any) -> dict[str, Any]:
+        return {
+            provider: credentials
+            for provider, credentials in (value or {}).items()
+            if provider in DEFAULT_SUBLIMINAL_PROVIDERS
+        }
+
+    @model_validator(mode="after")
+    def disable_when_no_supported_provider(self) -> "SubliminalProviderSettings":
+        if self.enabled and not self.providers:
+            self.enabled = False
+        return self
 
 
 class AssrtProviderSettings(BaseModel):

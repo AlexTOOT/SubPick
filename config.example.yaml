@@ -62,19 +62,12 @@ providers:
   subliminal:
     enabled: false
     providers:
-      - opensubtitles
       - opensubtitlescom
     # The values below may instead be saved through the Web UI API.
     languages:
       - zh-cn
       - zh-hant
     authentication:
-      addic7ed:
-        username: ""
-        password: ""
-      opensubtitles:
-        username: ""
-        password: ""
       opensubtitlescom:
         username: ""
         password: ""
