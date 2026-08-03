@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -277,9 +278,28 @@ def test_episode_search_prefers_one_season_query_and_returns_bundle() -> None:
 
     assert len(candidates) == 1
     assert len(client.calls) == 2
-    assert client.calls[0][1]["params"] == {"q": "大楼里只有谋杀 S01"}
+    assert client.calls[0][1]["params"] == {"q": "大楼里只有谋杀 第一季"}
     assert client.calls[1][0].endswith("/subs/1.html")
     assert candidates[0].raw_metadata["expected_episode"] == 3
+
+
+def test_episode_search_tries_localized_season_names_before_codes() -> None:
+    request = replace(
+        episode_request(),
+        title="泰迪熊",
+        original_title="Ted",
+        season=2,
+        episode=4,
+    )
+
+    assert [(query.value, query.strategy) for query in _search_queries(request)] == [
+        ("泰迪熊 第二季", "season_pack_localized"),
+        ("Ted Season 2", "season_pack_localized"),
+        ("泰迪熊 S02", "season_pack"),
+        ("Ted S02", "season_pack"),
+        ("泰迪熊 S02E04", "episode_fallback"),
+        ("Ted S02E04", "episode_fallback"),
+    ]
 
 
 class FixedSolver:

@@ -304,3 +304,27 @@ def test_episode_candidate_keeps_old_series_year_when_season_marker_matches() ->
         title="Long Running Show",
         original_title="Long Running Show",
     ) is None
+
+
+def test_episode_candidate_accepts_series_or_season_release_year() -> None:
+    candidate_with_season_year = SubtitleCandidate(
+        provider="assrt",
+        language="zh-cn",
+        is_bilingual=True,
+        format="ass",
+        title="泰迪熊",
+        source_url="https://example.invalid/season-year",
+        release_info="Ted.2026.WEB-DL",
+        confidence=0.8,
+        raw_metadata={},
+    )
+
+    assert candidate_mismatch_reason(
+        candidate_with_season_year,
+        season=2,
+        episode=4,
+        year=2024,
+        alternate_years=(2026,),
+        title="泰迪熊",
+        original_title="Ted",
+    ) is None

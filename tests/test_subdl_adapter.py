@@ -49,6 +49,8 @@ def test_subdl_v2_pages_through_undocumented_chinese_alias_and_unpacks_archive(t
         archive.writestr("Sound.of.Freedom.zh.srt", "1\n00:00:01,000 --> 00:00:02,000\nTest\n")
     client = Client(data.getvalue())
     provider = SubdlProvider(api_key="secret", client=client)
+    reports = []
+    provider.set_reporter(reports.append)
 
     candidates = provider.search(request())
     downloaded = provider.download(candidates[0], tmp_path)
@@ -62,6 +64,16 @@ def test_subdl_v2_pages_through_undocumented_chinese_alias_and_unpacks_archive(t
     search_calls = [call for call in client.calls if call[0].endswith("/subtitles/search")]
     assert [call[1]["params"]["page"] for call in search_calls] == [1, 2]
     assert all("languages" not in call[1]["params"] for call in search_calls)
+    progress = next(report for report in reports if report.status == "progress")
+    assert progress.reason == "IMDb tt7599146"
+    assert progress.search_context == {
+        "strategy": "imdb_id",
+        "query": "tt7599146",
+        "sd_id": "sd1665663",
+        "pages": 2,
+    }
+    completed = next(report for report in reports if report.status == "completed")
+    assert completed.reason == "IMDb tt7599146：1 条/2 页"
 
 
 def test_subdl_usage_uses_v2_bearer_auth():

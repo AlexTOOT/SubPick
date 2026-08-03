@@ -60,18 +60,32 @@ class SubdlProvider:
     def _search_with_fallbacks(self, request: SubtitleSearchRequest) -> tuple[list[SubtitleCandidate], str]:
         attempts: list[str] = []
         for strategy, query in _search_queries(request):
+            label = _search_label(strategy, query)
             titles = self._v2_get("/movies/search", {"q": query, "type": _media_type(request), "limit": 5}).get("results") or []
             sd_id = _select_sd_id(titles, request)
             if not sd_id:
-                attempts.append(f"{strategy}:not_found")
-                self._emit_progress(strategy, error="subdl_title_not_found")
+                attempts.append(f"{label}：未识别影片")
+                self._emit_progress(
+                    label,
+                    error="subdl_title_not_found",
+                    search_context={"strategy": strategy, "query": query},
+                )
                 continue
             candidates, pages = self._search_pages(sd_id, request)
-            attempts.append(f"{strategy}:{len(candidates)}@{pages}p")
-            self._emit_progress(strategy, candidate_count=len(candidates))
+            attempts.append(f"{label}：{len(candidates)} 条/{pages} 页")
+            self._emit_progress(
+                label,
+                candidate_count=len(candidates),
+                search_context={
+                    "strategy": strategy,
+                    "query": query,
+                    "sd_id": sd_id,
+                    "pages": pages,
+                },
+            )
             if candidates:
-                return candidates, ";".join(attempts)
-        return [], ";".join(attempts) or "no_search_key"
+                return candidates, "；".join(attempts)
+        return [], "；".join(attempts) or "无可用检索信息"
 
     def _search_pages(self, sd_id: str, request: SubtitleSearchRequest) -> tuple[list[SubtitleCandidate], int]:
         candidates: list[SubtitleCandidate] = []
@@ -143,8 +157,23 @@ class SubdlProvider:
                 self._sleeper(delay)
         self._last_api_request_at = self._clock()
 
-    def _emit_progress(self, strategy: str, candidate_count: int | None = None, error: str | None = None) -> None:
-        self._emit(ProviderSearchReport(provider=self.name, status="progress", candidate_count=candidate_count, reason=strategy, error=error))
+    def _emit_progress(
+        self,
+        reason: str,
+        candidate_count: int | None = None,
+        error: str | None = None,
+        search_context: dict[str, Any] | None = None,
+    ) -> None:
+        self._emit(
+            ProviderSearchReport(
+                provider=self.name,
+                status="progress",
+                candidate_count=candidate_count,
+                reason=reason,
+                error=error,
+                search_context=search_context or {},
+            )
+        )
 
     def _emit(self, report: ProviderSearchReport) -> None:
         if self._reporter:
@@ -161,6 +190,16 @@ def _search_queries(request: SubtitleSearchRequest) -> list[tuple[str, str]]:
             seen.add(normalized.casefold())
             result.append((strategy, normalized))
     return result
+
+
+def _search_label(strategy: str, query: str) -> str:
+    names = {
+        "imdb_id": "IMDb",
+        "original_title": "原始标题",
+        "title": "标题",
+        "file_name": "文件名",
+    }
+    return f"{names.get(strategy, strategy)} {query}"
 
 
 def _select_sd_id(results: Any, request: SubtitleSearchRequest) -> str | None:

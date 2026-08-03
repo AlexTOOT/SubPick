@@ -405,6 +405,7 @@ class SubtitleOrchestrator:
                 season=task.season,
                 episode=task.episode,
                 year=request.year,
+                alternate_years=request.alternate_years,
                 title=request.title,
                 original_title=request.original_title,
             )
@@ -422,6 +423,7 @@ class SubtitleOrchestrator:
                 "expected_title": request.title,
                 "expected_original_title": request.original_title,
                 "expected_year": request.year,
+                "alternate_years": list(request.alternate_years),
             }
             if mismatch_reason == "year_mismatch":
                 evidence = analyze_release_years(
@@ -1111,10 +1113,30 @@ class SubtitleOrchestrator:
             or _english_title_from_path(resolved_path)
         )
         year = (
-            task.year
-            or getattr(identity_item, "year", None)
-            or getattr(media_item, "year", None)
-            or job_metadata.get("year")
+            (
+                getattr(series_item, "year", None)
+                or task.year
+                or getattr(media_item, "year", None)
+                or job_metadata.get("year")
+            )
+            if is_episode
+            else (
+                task.year
+                or getattr(identity_item, "year", None)
+                or getattr(media_item, "year", None)
+                or job_metadata.get("year")
+            )
+        )
+        alternate_years = tuple(
+            candidate_year
+            for candidate_year in (
+                task.year,
+                getattr(media_item, "year", None),
+                job_metadata.get("year"),
+            )
+            if is_episode
+            and isinstance(candidate_year, int)
+            and candidate_year != year
         )
         title = task.title or resolved_path.stem
         if is_episode:
@@ -1143,6 +1165,7 @@ class SubtitleOrchestrator:
                 getattr(media_item, "series_id", None)
                 or getattr(series_item, "jellyfin_item_id", None)
             ),
+            alternate_years=tuple(dict.fromkeys(alternate_years)),
         )
 
     def _enrich_task_identity_from_path(self, task: Any, resolved_path: Path) -> None:

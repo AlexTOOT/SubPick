@@ -2150,7 +2150,7 @@ def test_episode_search_request_uses_parent_series_identity(tmp_path: Path) -> N
     video.write_bytes(b"video")
     task = build_task(video)
     task.title = "本地剧名 Local Show - S02E04 - 2160p"
-    task.year = None
+    task.year = 2026
     task.season = 2
     task.episode = 4
     task.media_server_id = "episode-id"
@@ -2186,6 +2186,7 @@ def test_episode_search_request_uses_parent_series_identity(tmp_path: Path) -> N
     assert request.title == "本地剧名"
     assert request.original_title == "Local Show"
     assert request.year == 2025
+    assert request.alternate_years == (2026,)
     assert request.imdb_id == "tt1234567"
     assert request.tmdb_id == "series-tmdb"
     assert request.series_id == "series-id"

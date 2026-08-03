@@ -184,6 +184,7 @@ def candidate_mismatch_reason(
     season: int | None,
     episode: int | None,
     year: int | None,
+    alternate_years: tuple[int, ...] = (),
     title: str | None = None,
     original_title: str | None = None,
 ) -> str | None:
@@ -211,11 +212,21 @@ def candidate_mismatch_reason(
         seasons, episodes = _episode_markers(candidate_text)
         if not seasons and not episodes:
             candidate_years = _release_years(candidate_text)
+            expected_years = tuple(
+                dict.fromkeys(
+                    expected_year
+                    for expected_year in (year, *alternate_years)
+                    if expected_year is not None
+                )
+            )
             if (
-                year is not None
+                expected_years
                 and candidate_years
                 and all(
-                    abs(candidate_year - year) >= EPISODE_YEAR_MISMATCH_YEARS
+                    all(
+                        abs(candidate_year - expected_year) >= EPISODE_YEAR_MISMATCH_YEARS
+                        for expected_year in expected_years
+                    )
                     for candidate_year in candidate_years
                 )
             ):

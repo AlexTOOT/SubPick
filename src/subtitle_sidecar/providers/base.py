@@ -23,6 +23,7 @@ class SubtitleSearchRequest:
     tmdb_id: str | None = None
     original_title: str | None = None
     series_id: str | None = None
+    alternate_years: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
