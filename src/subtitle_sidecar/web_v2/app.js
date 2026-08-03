@@ -940,7 +940,10 @@ function renderTaskDetail(task) {
       <div><span>原始路径</span><strong>${escapeHtml(task.video_path_original)}</strong></div>
       <div><span>解析路径</span><strong>${escapeHtml(task.video_path_resolved || "尚未解析")}</strong></div>
     </div>
-    <section class="drawer-section"><h3>搜索结果与排序</h3>${discovery}</section>
+    <details class="drawer-section candidate-discovery-section">
+      <summary>搜索结果与排序</summary>
+      <div class="candidate-discovery-body">${discovery}</div>
+    </details>
     <section class="drawer-section"><h3>已尝试候选</h3><div class="candidate-list">${candidates}</div></section>
     <section class="drawer-section"><h3>处理日志</h3><div class="event-list">${events}</div></section>
     <section class="drawer-section"><h3>字幕产物</h3><div class="candidate-list">${artifacts}</div></section>
@@ -2739,7 +2742,7 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const summary = event.target.closest("summary");
     const details = summary?.parentElement;
-    if (!details?.matches(".provider-config-card, .nested-settings, .health-settings, .health-version-details, .season-block")) return;
+    if (!details?.matches(".provider-config-card, .nested-settings, .health-settings, .health-version-details, .season-block, .candidate-discovery-section")) return;
     if (event.target.closest("button, a, input, select, textarea, [data-provider-drag]")) return;
     animateDisclosure(details, event);
   });

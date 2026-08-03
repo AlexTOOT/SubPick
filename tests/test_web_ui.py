@@ -106,6 +106,8 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "window.setTimeout(resolve, 1750)" in js
     assert "safeExternalUrl(candidate.source_url)" in js
     assert "搜索结果与排序" in js
+    assert '<details class="drawer-section candidate-discovery-section">' in js
+    assert '<details class="drawer-section candidate-discovery-section" open>' not in js
     assert "查看字幕源原始返回顺序" in js
     assert "已尝试候选" in js
     assert 'href="/legacy"' not in html
