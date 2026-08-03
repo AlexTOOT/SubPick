@@ -403,6 +403,37 @@ def test_jellyfin_batch_add_creates_jobs_from_cached_media_items(tmp_path: Path)
     assert task.episode == 2
 
 
+def test_jellyfin_batch_add_deduplicates_item_ids_within_one_request(tmp_path: Path):
+    media = tmp_path / "Show.S01E02.mkv"
+    media.write_bytes(b"video")
+    enqueued_task_ids: list[int] = []
+    app = create_app(data_dir=tmp_path / "data", job_processor=lambda task_id: None)
+    app.state.enqueue_task = enqueued_task_ids.append
+
+    with TestClient(app) as client:
+        _cache_jellyfin_item(
+            app,
+            jellyfin_item_id="episode-1",
+            library_id="tv-lib",
+            library_name="TV",
+            item_type="Episode",
+            name="第 2 集",
+            path=str(media),
+            series_name="剧集",
+            year=2025,
+            season=1,
+            episode=2,
+        )
+        response = client.post(
+            "/api/v1/jellyfin/tasks",
+            json={"item_ids": ["episode-1", "episode-1"]},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 1
+    assert len(enqueued_task_ids) == 1
+
+
 def test_jellyfin_movie_library_tree_returns_media_cards_from_cache(tmp_path: Path):
     app = create_app(data_dir=tmp_path, job_processor=lambda task_id: None)
     with TestClient(app) as client:

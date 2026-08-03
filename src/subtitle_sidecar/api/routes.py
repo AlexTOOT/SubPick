@@ -1405,26 +1405,30 @@ def create_api_router() -> APIRouter:
         payload: JellyfinCreateTasksRequest,
     ) -> JellyfinCreateTasksResponse:
         task_ids_to_enqueue: list[int] = []
-        results: list[JellyfinCreateTaskResultResponse] = []
+        results_by_id: dict[str, JellyfinCreateTaskResultResponse] = {}
+        item_ids = list(dict.fromkeys(payload.item_ids))
         with session_scope(request.app.state.engine) as session:
             repo = Repository(session)
-            items = repo.get_jellyfin_media_items_by_ids(payload.item_ids)
+            items = repo.get_jellyfin_media_items_by_ids(item_ids)
             items_by_id = {item.jellyfin_item_id: item for item in items}
-            for item_id in payload.item_ids:
+            valid_items = []
+            for item_id in item_ids:
                 item = items_by_id.get(item_id)
                 if item is None:
-                    results.append(
-                        JellyfinCreateTaskResultResponse(
-                            item_id=item_id,
-                            ok=False,
-                            job_id=None,
-                            task_id=None,
-                            status="not_found",
-                            error="Jellyfin item not found; scan the library first",
-                        )
+                    results_by_id[item_id] = JellyfinCreateTaskResultResponse(
+                        item_id=item_id,
+                        ok=False,
+                        job_id=None,
+                        task_id=None,
+                        status="not_found",
+                        error="Jellyfin item not found; scan the library first",
                     )
                     continue
-                job = repo.create_job(
+
+                valid_items.append(item)
+
+            jobs = repo.create_jobs(
+                [
                     JobCreate(
                         source="jellyfin-manual",
                         raw_payload={
@@ -1434,28 +1438,29 @@ def create_api_router() -> APIRouter:
                         },
                         video_path_original=item.path,
                         media_server_id=item.jellyfin_item_id,
+                        title=item.series_name or item.name,
+                        year=item.year,
+                        season=item.season,
+                        episode=item.episode,
                     )
-                )
+                    for item in valid_items
+                ]
+            )
+            for item, job in zip(valid_items, jobs, strict=True):
                 task = job.video_tasks[0]
-                task.title = item.series_name or item.name
-                task.year = item.year
-                task.season = item.season
-                task.episode = item.episode
                 task_ids_to_enqueue.append(task.id)
-                results.append(
-                    JellyfinCreateTaskResultResponse(
-                        item_id=item_id,
-                        ok=True,
-                        job_id=job.id,
-                        task_id=task.id,
-                        status=task.status,
-                        error=None,
-                    )
+                results_by_id[item.jellyfin_item_id] = JellyfinCreateTaskResultResponse(
+                    item_id=item.jellyfin_item_id,
+                    ok=True,
+                    job_id=job.id,
+                    task_id=task.id,
+                    status=task.status,
+                    error=None,
                 )
 
         for task_id in task_ids_to_enqueue:
             _enqueue_task(request, task_id)
-        return JellyfinCreateTasksResponse(results=results)
+        return JellyfinCreateTasksResponse(results=[results_by_id[item_id] for item_id in item_ids])
 
     @router.post(
         "/tasks/batch-retry",

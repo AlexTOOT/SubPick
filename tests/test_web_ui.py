@@ -99,6 +99,9 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "providerDiagnosticStatus" in js
     assert "autoCheckProviders" not in js
     assert "drawerOpenSeasons" in js
+    assert "mediaAdding: false" in js
+    assert "if (state.mediaAdding) return;" in js
+    assert "正在添加 ${taskCount} 个任务" in js
     assert "getRandomValues" in js
     assert "grid-template-rows: 18px 40px 18px" in css
     assert "scrollbar-gutter: stable" in css

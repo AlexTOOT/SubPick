@@ -37,6 +37,10 @@ class JobCreate:
     raw_payload: dict[str, Any]
     video_path_original: str
     media_server_id: str | None = None
+    title: str | None = None
+    year: int | None = None
+    season: int | None = None
+    episode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,21 +79,31 @@ class Repository:
         self.session = session
 
     def create_job(self, data: JobCreate) -> Job:
-        job = Job(
-            source=data.source,
-            raw_payload_json=data.raw_payload,
-            status="queued",
-        )
-        job.video_tasks.append(
-            VideoTask(
-                video_path_original=data.video_path_original,
-                media_server_id=data.media_server_id,
+        return self.create_jobs([data])[0]
+
+    def create_jobs(self, items: list[JobCreate]) -> list[Job]:
+        jobs: list[Job] = []
+        for data in items:
+            job = Job(
+                source=data.source,
+                raw_payload_json=data.raw_payload,
                 status="queued",
             )
-        )
-        self.session.add(job)
+            job.video_tasks.append(
+                VideoTask(
+                    video_path_original=data.video_path_original,
+                    media_server_id=data.media_server_id,
+                    title=data.title,
+                    year=data.year,
+                    season=data.season,
+                    episode=data.episode,
+                    status="queued",
+                )
+            )
+            jobs.append(job)
+        self.session.add_all(jobs)
         self.session.flush()
-        return job
+        return jobs
 
     def get_setting(self, key: str) -> dict[str, Any] | None:
         setting = self.session.get(AppSetting, key)

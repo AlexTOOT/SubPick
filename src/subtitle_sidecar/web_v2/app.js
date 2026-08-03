@@ -21,6 +21,7 @@ const state = {
   mediaSort: "date_created",
   mediaSortDirection: "desc",
   selectedMedia: new Set(),
+  mediaAdding: false,
   drawerSeriesId: null,
   drawerMissingOnly: false,
   drawerOpenSeasons: new Set(),
@@ -1206,8 +1207,11 @@ async function navigateToRecentMedia(libraryId, itemId) {
 function updateMediaButtons() {
   const taskCount = selectedTaskMediaIds().length;
   const topLevelCount = [...state.selectedMedia].filter((id) => state.media.some((item) => item.id === id)).length;
-  $("#library-add").disabled = taskCount === 0;
-  $("#library-add").textContent = taskCount ? `添加选中任务 (${taskCount})` : "添加选中任务";
+  const addLabel = state.mediaAdding ? `正在添加 ${taskCount} 个任务…` : (taskCount ? `添加选中任务 (${taskCount})` : "添加选中任务");
+  [$("#library-add"), $("#drawer-add-media")].filter(Boolean).forEach((button) => {
+    button.disabled = state.mediaAdding || taskCount === 0;
+    button.textContent = addLabel;
+  });
   $("#library-ignore").disabled = topLevelCount === 0;
   $("#library-ignore").textContent = topLevelCount ? `忽略选中 (${topLevelCount})` : "忽略选中";
   $("#library-unignore").disabled = topLevelCount === 0;
@@ -1258,12 +1262,6 @@ function syncSeriesDrawerSelection(item) {
   $$(".drawer-episode-check", $("#drawer-content")).forEach((checkbox) => {
     checkbox.checked = state.selectedMedia.has(checkbox.dataset.episodeId) || state.selectedMedia.has(item.id);
   });
-  const addButton = $("#drawer-add-media");
-  const count = selectedTaskMediaIds().length;
-  if (addButton) {
-    addButton.disabled = count === 0;
-    addButton.textContent = count ? `添加选中任务 (${count})` : "添加选中任务";
-  }
   updateMediaButtons();
 }
 
@@ -1373,8 +1371,11 @@ function selectedTaskMediaIds() {
 }
 
 async function addMediaTasks() {
+  if (state.mediaAdding) return;
   const itemIds = selectedTaskMediaIds();
   if (!itemIds.length) return;
+  state.mediaAdding = true;
+  updateMediaButtons();
   try {
     const { payload } = await api("/api/v1/jellyfin/tasks", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1385,7 +1386,12 @@ async function addMediaTasks() {
     renderMedia();
     closeDrawer();
     showToast(`已添加 ${ok}/${itemIds.length} 个任务`);
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    state.mediaAdding = false;
+    updateMediaButtons();
+  }
 }
 
 async function batchIgnoreMedia(ignored) {
