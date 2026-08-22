@@ -69,10 +69,8 @@ mkdir -p "$STAGE"
 tar -xf "$ARCHIVE" -C "$STAGE"
 test -f "$STAGE/uv.lock"
 test -f "$STAGE/Dockerfile"
+test -f "$ROOT/compose.yaml"
 docker build -t "ghcr.io/alextoot/subpick:__COMMIT__" "$STAGE"
-cp "$STAGE/compose.yaml" "$ROOT/compose.yaml"
-sed -i "s|/volume1/SubPick:/appdata|$ROOT:/appdata|" "$ROOT/compose.yaml"
-sed -i "s|/volume1/media:/media|__MEDIA_PATH__:/media|" "$ROOT/compose.yaml"
 
 ROLLBACK_IMAGE="ghcr.io/alextoot/subpick:rollback-__COMMIT__"
 HAS_ROLLBACK=0
@@ -126,7 +124,6 @@ exit 1
 '@
 $remoteScript = $remoteScript.Replace("__ROOT__", $RemotePath)
 $remoteScript = $remoteScript.Replace("__COMMIT__", $commit)
-$remoteScript = $remoteScript.Replace("__MEDIA_PATH__", $MediaPath)
 $remoteScript = $remoteScript.Replace("__SERVICE__", $ComposeService)
 $remoteScript = $remoteScript.Replace("__HEALTH__", $HealthUrl)
 $remoteScript = $remoteScript.Replace("`r", "")
