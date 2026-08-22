@@ -1170,31 +1170,42 @@ class SubtitleOrchestrator:
 
     def _enrich_task_identity_from_path(self, task: Any, resolved_path: Path) -> None:
         episode_identity = _episode_identity_from_path(resolved_path)
-        if episode_identity is None:
-            return
-        season, episode, series_title, year = episode_identity
         changed: dict[str, Any] = {}
-        if task.season is None:
-            task.season = season
-            changed["season"] = season
-        if task.episode is None:
-            task.episode = episode
-            changed["episode"] = episode
-        if not str(task.title or "").strip():
-            task.title = series_title
-            changed["title"] = series_title
-        if task.year is None and year is not None:
-            task.year = year
-            changed["year"] = year
+        if episode_identity is not None:
+            season, episode, series_title, year = episode_identity
+            if task.season is None:
+                task.season = season
+                changed["season"] = season
+            if task.episode is None:
+                task.episode = episode
+                changed["episode"] = episode
+            if not str(task.title or "").strip():
+                task.title = series_title
+                changed["title"] = series_title
+            if task.year is None and year is not None:
+                task.year = year
+                changed["year"] = year
+        else:
+            movie_identity = _movie_identity_from_path(resolved_path)
+            if movie_identity is None:
+                return
+            movie_title, year = movie_identity
+            if not str(task.title or "").strip():
+                task.title = movie_title
+                changed["title"] = movie_title
+            if task.year is None:
+                task.year = year
+                changed["year"] = year
         if not changed:
             return
+        identity = f"S{task.season:02d}E{task.episode:02d}，" if episode_identity else ""
         self._record_task_event(
             task.id,
             "metadata",
             "completed",
             message=(
                 f"路径元数据：{task.title or '标题未知'}，"
-                f"S{task.season:02d}E{task.episode:02d}，年份 {task.year or '未知'}"
+                f"{identity}年份 {task.year or '未知'}"
             ),
             details={"source": "path", **changed},
         )
@@ -1812,6 +1823,24 @@ def _normalized_search_title(value: str | None, *, is_episode: bool) -> str | No
             flags=re.IGNORECASE,
         ).strip(" .-_")
     return normalized or None
+
+
+def _movie_identity_from_path(path: Path) -> tuple[str, int] | None:
+    """Read a conservative movie title/year pair from common media naming."""
+    pattern = re.compile(
+        r"(?<!\d)(?:\((?P<paren_year>(?:18|19|20)\d{2})\)|"
+        r"\[(?P<bracket_year>(?:18|19|20)\d{2})\])(?!\d)"
+    )
+    for value in (path.parent.name, path.stem):
+        match = pattern.search(value)
+        if match is None:
+            continue
+        title = value[: match.start()].strip(" .-_")
+        if not title:
+            continue
+        year = int(match.group("paren_year") or match.group("bracket_year"))
+        return title, year
+    return None
 
 
 def _episode_identity_from_path(path: Path) -> tuple[int, int, str, int | None] | None:

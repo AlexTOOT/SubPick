@@ -450,6 +450,41 @@ def test_movie_task_skips_explicit_series_candidate(tmp_path: Path) -> None:
     assert any(event["stage"] == "candidate_filter" for event in repository.task_events)
 
 
+def test_movie_path_identity_rejects_candidate_from_different_year(tmp_path: Path) -> None:
+    movie_dir = tmp_path / "群体 Colony (2026)"
+    movie_dir.mkdir()
+    video = movie_dir / "群体 Colony (2026) - 1080p.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    task.title = None
+    task.year = None
+    provider = FakeProvider()
+    wrong_candidate = replace(
+        build_candidate(),
+        provider="zimuku",
+        title="末世殖民地The.Colony.2013.1080p.WEB-DL.chs&eng.srt",
+        release_info="The.Colony.2013.1080p.WEB-DL",
+    )
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([provider], [wrong_candidate]),
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    assert task.title == "群体 Colony"
+    assert task.year == 2026
+    assert provider.download_calls == []
+    assert task.error_message == "no_candidate_found"
+    filters = [event for event in repository.task_events if event["stage"] == "candidate_filter"]
+    assert filters[0]["details"]["reason"] == "year_mismatch"
+    assert filters[0]["details"]["expected_year"] == 2026
+    assert filters[0]["details"]["candidate_years"] == [2013]
+
+
 def test_assrt_title_mismatch_records_its_own_filter_reason(tmp_path: Path) -> None:
     video = tmp_path / "Gas.Man.S01E01.mkv"
     video.write_bytes(b"video")
@@ -2223,6 +2258,39 @@ def test_path_identity_fills_moviepilot_episode_metadata(tmp_path: Path) -> None
     assert request.season == 1
     assert request.episode == 14
     assert repository.task_events[-1]["details"]["source"] == "path"
+
+
+def test_path_identity_fills_moviepilot_movie_metadata(tmp_path: Path) -> None:
+    movie_dir = tmp_path / "群体 Colony (2026)"
+    movie_dir.mkdir()
+    video = movie_dir / "群体 Colony (2026) - 1080p.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    task.title = None
+    task.year = None
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([FakeProvider()], []),
+    )
+
+    orchestrator._enrich_task_identity_from_path(task, video)
+    request = orchestrator._build_search_request(task, video)
+
+    assert task.title == "群体 Colony"
+    assert task.year == 2026
+    assert task.season is None
+    assert task.episode is None
+    assert request.media_type == "movie"
+    assert request.title == "群体 Colony"
+    assert request.year == 2026
+    assert repository.task_events[-1]["details"] == {
+        "source": "path",
+        "title": "群体 Colony",
+        "year": 2026,
+    }
 
 
 def test_process_video_task_refreshes_jellyfin_item_by_path_after_success(tmp_path: Path) -> None:
