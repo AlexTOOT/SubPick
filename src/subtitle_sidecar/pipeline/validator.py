@@ -71,6 +71,27 @@ def validate_subtitle_file(
             encoding=encoding,
         )
 
+    if duration_seconds is not None and video_duration_seconds is not None:
+        allowed_overrun = max(300.0, video_duration_seconds * 0.08)
+        if duration_seconds > video_duration_seconds + allowed_overrun:
+            return ValidationResult(
+                is_valid=False,
+                has_chinese=True,
+                reason="timeline_exceeds_video",
+                encoding=encoding,
+                cue_count=cue_count,
+                duration_seconds=duration_seconds,
+            )
+        if video_duration_seconds >= 40 * 60 and duration_seconds < video_duration_seconds * 0.5:
+            return ValidationResult(
+                is_valid=False,
+                has_chinese=True,
+                reason="timeline_too_short",
+                encoding=encoding,
+                cue_count=cue_count,
+                duration_seconds=duration_seconds,
+            )
+
     return ValidationResult(
         is_valid=True,
         has_chinese=True,

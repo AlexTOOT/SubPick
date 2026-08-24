@@ -463,6 +463,7 @@ def _to_candidate(
             "assrt_vote_score": vote_score,
             "expected_media_type": request.media_type,
             "expected_year": request.year,
+            "expected_alternate_years": list(request.alternate_years),
             "expected_titles": [request.title, request.original_title],
         },
     )
@@ -484,16 +485,34 @@ def _assert_movie_year_compatible(
     if str(metadata.get("expected_media_type") or "").lower() != "movie":
         return
     expected_year = metadata.get("expected_year")
-    if not isinstance(expected_year, int):
+    alternate_years = metadata.get("expected_alternate_years")
+    expected_years = tuple(
+        dict.fromkeys(
+            year
+            for year in (
+                expected_year,
+                *(alternate_years if isinstance(alternate_years, list) else []),
+            )
+            if isinstance(year, int)
+        )
+    )
+    if not expected_years:
         return
     expected_titles = metadata.get("expected_titles") or []
-    evidence = analyze_release_years(
-        filenames,
-        expected_year=expected_year,
-        expected_titles=expected_titles,
-    )
-    if evidence.has_conflict:
-        years = ",".join(str(year) for year in sorted(evidence.years))
+    filename_values = tuple(filenames)
+    evidence = [
+        analyze_release_years(
+            filename_values,
+            expected_year=year,
+            expected_titles=expected_titles,
+        )
+        for year in expected_years
+    ]
+    if evidence and all(item.has_conflict for item in evidence):
+        years = ",".join(
+            str(year)
+            for year in sorted({year for item in evidence for year in item.years})
+        )
         raise AssrtApiError(f"assrt_detail_year_mismatch:{years}:{expected_year}")
 
 

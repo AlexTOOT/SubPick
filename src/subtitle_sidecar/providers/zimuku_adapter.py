@@ -856,12 +856,21 @@ def _work_matches_request(
     query: _SearchQuery,
 ) -> bool:
     episode = request.media_type.lower() in {"episode", "tv", "tvshow"}
-    if not episode and request.year is not None:
+    if request.year is not None:
         years = set(_release_years(work_title))
-        # Festival, theatrical and streaming releases can legitimately differ
-        # by one year between Jellyfin and Zimuku. Keep nearby years eligible;
-        # the common candidate validator still rejects clearly distant years.
-        if years and all(abs(year - request.year) > 1 for year in years):
+        expected_years = {
+            year
+            for year in (request.year, *request.alternate_years)
+            if isinstance(year, int)
+        }
+        # Festival, theatrical, streaming, series-premiere and episode years
+        # can legitimately differ by one year. Keep nearby years eligible;
+        # stable distant work years are safe to reject for both media types.
+        if years and all(
+            abs(year - expected) > 1
+            for year in years
+            for expected in expected_years
+        ):
             return False
     if episode and request.season is not None:
         detected = _season_number(work_title)
@@ -877,10 +886,20 @@ def _work_matches_request(
     chinese_expected = "".join(re.findall(r"[\u3400-\u9fff]", expected))
     chinese_actual = "".join(re.findall(r"[\u3400-\u9fff]", actual))
     if chinese_expected and chinese_actual:
-        return chinese_expected in chinese_actual or chinese_actual in chinese_expected
+        return _chinese_work_identity(expected) == _chinese_work_identity(actual)
     tokens = {token for token in re.findall(r"[a-z0-9]+", expected) if len(token) > 1}
     actual_tokens = set(re.findall(r"[a-z0-9]+", actual))
     return not tokens or len(tokens & actual_tokens) >= max(1, math.ceil(len(tokens) * 0.6))
+
+
+def _chinese_work_identity(value: str) -> str:
+    cleaned = re.sub(
+        r"第\s*[一二三四五六七八九十百零两\d]+\s*(?:季|集)",
+        "",
+        value,
+    )
+    cleaned = re.sub(r"(?:美|英|日|韩|法|德|台|港)版", "", cleaned)
+    return "".join(re.findall(r"[\u3400-\u9fff]", cleaned))
 
 
 def _season_number(value: str) -> int | None:

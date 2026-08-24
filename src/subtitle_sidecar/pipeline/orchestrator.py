@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import math
 from pathlib import Path
 import re
@@ -40,7 +41,7 @@ from subtitle_sidecar.pipeline.status import (
     TASK_VALIDATING,
 )
 from subtitle_sidecar.pipeline.validator import validate_subtitle_file
-from subtitle_sidecar.probe.streams import probe_video_streams
+from subtitle_sidecar.probe.streams import probe_video_duration_seconds, probe_video_streams
 from subtitle_sidecar.providers.base import DownloadedSubtitle, SubtitleCandidate, SubtitleSearchRequest
 from subtitle_sidecar.sync.ffsubsync import sync_subtitle
 
@@ -91,6 +92,7 @@ class SubtitleOrchestrator:
         resolver: Any,
         provider_registry: Any,
         embedded_subtitle_detector: Any | None = None,
+        video_duration_prober: Any | None = None,
         subtitle_syncer: Any | None = None,
         bundle_cache: EpisodeBundleCache | None = None,
         jellyfin_client_factory: Any | None = None,
@@ -100,10 +102,12 @@ class SubtitleOrchestrator:
         self.resolver = resolver
         self.provider_registry = provider_registry
         self.embedded_subtitle_detector = embedded_subtitle_detector or probe_video_streams
+        self.video_duration_prober = video_duration_prober or probe_video_duration_seconds
         self.subtitle_syncer = subtitle_syncer or sync_subtitle
         self.bundle_cache = bundle_cache or EpisodeBundleCache(Path(settings.cache_dir))
         self.jellyfin_client_factory = jellyfin_client_factory
         self._retry_content_identities: dict[int, dict[str, int]] = {}
+        self._video_duration_cache: dict[Path, float | None] = {}
 
     def preflight_video_task(self, task_id: int) -> bool:
         """Run local-only checks before a task occupies the provider search queue."""
@@ -388,6 +392,7 @@ class SubtitleOrchestrator:
         attempt_budget: int,
     ) -> tuple[bool, int, str | None]:
         task_id = task.id
+        video_duration_seconds = self._video_duration_seconds(resolved_path)
         self._record_candidate_results(task_id, candidates)
         compatible_candidates = []
         mismatch_counts: dict[str, int] = {}
@@ -644,7 +649,10 @@ class SubtitleOrchestrator:
                     error_message=last_failure_reason,
                 )
                 continue
-            validation = validate_subtitle_file(downloaded.path)
+            validation = validate_subtitle_file(
+                downloaded.path,
+                video_duration_seconds=video_duration_seconds,
+            )
             if not validation.is_valid:
                 last_failure_reason = validation.reason or "invalid_subtitle"
                 self._record_task_event(
@@ -700,7 +708,10 @@ class SubtitleOrchestrator:
                     _synced_output_path(downloaded.path),
                 )
                 if sync_result.success:
-                    synced_validation = validate_subtitle_file(sync_result.output_path)
+                    synced_validation = validate_subtitle_file(
+                        sync_result.output_path,
+                        video_duration_seconds=video_duration_seconds,
+                    )
                     if not synced_validation.is_valid:
                         last_failure_reason = synced_validation.reason or "invalid_synced_subtitle"
                         self._record_task_event(
@@ -1134,8 +1145,7 @@ class SubtitleOrchestrator:
                 getattr(media_item, "year", None),
                 job_metadata.get("year"),
             )
-            if is_episode
-            and isinstance(candidate_year, int)
+            if isinstance(candidate_year, int)
             and candidate_year != year
         )
         title = task.title or resolved_path.stem
@@ -1167,6 +1177,18 @@ class SubtitleOrchestrator:
             ),
             alternate_years=tuple(dict.fromkeys(alternate_years)),
         )
+
+    def _video_duration_seconds(self, video_path: Path) -> float | None:
+        path = Path(video_path)
+        if path in self._video_duration_cache:
+            return self._video_duration_cache[path]
+        try:
+            duration = self.video_duration_prober(path, self.settings.probe.ffprobe_path)
+        except (OSError, RuntimeError, ValueError):
+            duration = None
+        value = float(duration) if isinstance(duration, (int, float)) and duration > 0 else None
+        self._video_duration_cache[path] = value
+        return value
 
     def _enrich_task_identity_from_path(self, task: Any, resolved_path: Path) -> None:
         episode_identity = _episode_identity_from_path(resolved_path)
@@ -1827,20 +1849,37 @@ def _normalized_search_title(value: str | None, *, is_episode: bool) -> str | No
 
 def _movie_identity_from_path(path: Path) -> tuple[str, int] | None:
     """Read a conservative movie title/year pair from common media naming."""
-    pattern = re.compile(
+    wrapped_pattern = re.compile(
         r"(?<!\d)(?:\((?P<paren_year>(?:18|19|20)\d{2})\)|"
         r"\[(?P<bracket_year>(?:18|19|20)\d{2})\])(?!\d)"
     )
+    bare_pattern = re.compile(r"(?<!\d)(?:18|19|20)\d{2}(?!\d|[pi])", re.IGNORECASE)
+    latest_year = datetime.now(timezone.utc).year + 1
     for value in (path.parent.name, path.stem):
-        match = pattern.search(value)
-        if match is None:
-            continue
-        title = value[: match.start()].strip(" .-_")
-        if not title:
-            continue
-        year = int(match.group("paren_year") or match.group("bracket_year"))
-        return title, year
+        wrapped = wrapped_pattern.search(value)
+        matches = [wrapped] if wrapped is not None else [
+            match
+            for match in bare_pattern.finditer(value)
+            if int(match.group(0)) <= latest_year
+        ]
+        for match in reversed(matches):
+            if match is None:
+                continue
+            title = _clean_release_title(value[: match.start()])
+            if not title:
+                continue
+            year = int(
+                match.groupdict().get("paren_year")
+                or match.groupdict().get("bracket_year")
+                or match.group(0)
+            )
+            return title, year
     return None
+
+
+def _clean_release_title(value: str) -> str:
+    normalized = re.sub(r"[._]+", " ", value)
+    return re.sub(r"\s+", " ", normalized).strip(" .-_")
 
 
 def _episode_identity_from_path(path: Path) -> tuple[int, int, str, int | None] | None:

@@ -210,6 +210,21 @@ def test_movie_work_page_rejects_distant_release_year() -> None:
     assert pages == []
 
 
+def test_movie_work_page_accepts_explicit_alternate_release_year() -> None:
+    request = replace(movie_request(), year=2026, alternate_years=(2024,))
+    html = SEARCH_HTML.replace("(2025)", "(2024)")
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title"),
+    )
+
+    assert pages == [
+        ("新·驯龙高手 How to Train Your Dragon (2024)", "//zimuku.org/subs/73237.html")
+    ]
+
+
 def test_work_results_keep_bilingual_rows_and_parse_real_download_column() -> None:
     request = movie_request()
     query = _SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title")
@@ -302,6 +317,52 @@ def test_episode_search_tries_localized_season_names_before_codes() -> None:
         ("泰迪熊 S02E04", "episode_fallback"),
         ("Ted S02E04", "episode_fallback"),
     ]
+
+
+def test_episode_work_rejects_distant_same_substring_series() -> None:
+    request = replace(
+        episode_request(),
+        title="办公室",
+        original_title="The Office",
+        year=2005,
+        season=2,
+        episode=1,
+    )
+    html = SEASON_HTML.replace(
+        "大楼里只有谋杀 Only Murders in the Building 第一季 (2021)",
+        "传奇办公室 第二季 Le Bureau des Légendes (2016)",
+    )
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("办公室 第二季", "办公室", "title", "season_pack_localized"),
+    )
+
+    assert pages == []
+
+
+def test_chinese_work_title_does_not_accept_unrelated_prefix() -> None:
+    request = replace(
+        episode_request(),
+        title="办公室",
+        original_title=None,
+        year=None,
+        season=2,
+        episode=1,
+    )
+    html = SEASON_HTML.replace(
+        "大楼里只有谋杀 Only Murders in the Building 第一季 (2021)",
+        "传奇办公室 第二季",
+    )
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("办公室 第二季", "办公室", "title", "season_pack_localized"),
+    )
+
+    assert pages == []
 
 
 class FixedSolver:

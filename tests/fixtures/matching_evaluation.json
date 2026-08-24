@@ -1,0 +1,474 @@
+{
+  "schema_version": 1,
+  "metadata_source": "IMDb",
+  "dialogue_fingerprint_algorithm": "sha256(nfkc_casefold_alnum)",
+  "notes": "Only metadata and irreversible dialogue fingerprints are stored. No subtitle text is committed.",
+  "cases": [
+    {
+      "id": "movie-colony-2026",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/Colony.2026.1080p.WEB-DL.mkv",
+      "path_title": "Colony",
+      "title": "群体",
+      "original_title": "Colony",
+      "year": 2026,
+      "alternate_years": [],
+      "imdb_id": "tt34385135",
+      "runtime_seconds": 7320,
+      "last_cue_seconds": 7220,
+      "metadata_url": "https://www.imdb.com/title/tt34385135/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "群体 Colony (2026)",
+        "work_year": 2026,
+        "title": "Colony.2026.1080p.WEBRip.chs.srt",
+        "release_info": "Colony.2026.1080p.WEBRip"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "末世殖民地 The Colony (2013)",
+          "work_year": 2013,
+          "title": "The.Colony.2013.1080p.WEB-DL.chs.srt",
+          "release_info": "The.Colony.2013.1080p.WEB-DL",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": [
+          "https://zimuku.org/detail/233978.html",
+          "https://zimuku.org/detail/234624.html"
+        ],
+        "fingerprints": [
+          "0a4b358671f6ace02437879354fbca74ec91ca831a01aa0326f533074ac2d096",
+          "6a136f4e1b39968a48febb44a7c5f1e6fdddd36f265139a4be3350c7bce59e24",
+          "df6b7b922cf222e75112cd3e7abe481ac7cb11a8526532c111478924f4990b99"
+        ]
+      }
+    },
+    {
+      "id": "movie-dune-2021",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/Dune.2021.2160p.WEB-DL.mkv",
+      "path_title": "Dune",
+      "title": "沙丘",
+      "original_title": "Dune",
+      "year": 2021,
+      "alternate_years": [],
+      "imdb_id": "tt1160419",
+      "runtime_seconds": 9300,
+      "last_cue_seconds": 9180,
+      "metadata_url": "https://www.imdb.com/title/tt1160419/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "沙丘 Dune (2021)",
+        "work_year": 2021,
+        "title": "Dune.2021.WEB-DL.chs.ass",
+        "release_info": "Dune.2021.2160p.WEB-DL"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "沙丘 Dune (1984)",
+          "work_year": 1984,
+          "title": "Dune.1984.BluRay.chs.srt",
+          "release_info": "Dune.1984.1080p.BluRay",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt1160419/quotes/"],
+        "fingerprints": ["47c39599de039b8f4df6351f7370f61163b1e90a27ded8e96fb3ea2309212c6a"]
+      }
+    },
+    {
+      "id": "movie-the-thing-1982",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/The.Thing.1982.1080p.BluRay.mkv",
+      "path_title": "The Thing",
+      "title": "怪形",
+      "original_title": "The Thing",
+      "year": 1982,
+      "alternate_years": [],
+      "imdb_id": "tt0084787",
+      "runtime_seconds": 6540,
+      "last_cue_seconds": 6450,
+      "metadata_url": "https://www.imdb.com/title/tt0084787/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "怪形 The Thing (1982)",
+        "work_year": 1982,
+        "title": "The.Thing.1982.BluRay.chs.srt",
+        "release_info": "The.Thing.1982.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "怪形前传 The Thing (2011)",
+          "work_year": 2011,
+          "title": "The.Thing.2011.BluRay.chs.srt",
+          "release_info": "The.Thing.2011.1080p.BluRay",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt0084787/quotes/"],
+        "fingerprints": ["6fa12ccf6175d7ef413a3aa16bf6fe8f2ff27de4a4eddd745de90107108b25a2"]
+      }
+    },
+    {
+      "id": "movie-crash-2004",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/Crash.2004.1080p.BluRay.mkv",
+      "path_title": "Crash",
+      "title": "撞车",
+      "original_title": "Crash",
+      "year": 2004,
+      "alternate_years": [2005],
+      "imdb_id": "tt0375679",
+      "runtime_seconds": 6720,
+      "last_cue_seconds": 6610,
+      "metadata_url": "https://www.imdb.com/title/tt0375679/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "撞车 Crash (2005)",
+        "work_year": 2005,
+        "title": "Crash.2005.BluRay.chs.srt",
+        "release_info": "Crash.2005.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "欲望号快车 Crash (1996)",
+          "work_year": 1996,
+          "title": "Crash.1996.BluRay.chs.srt",
+          "release_info": "Crash.1996.1080p.BluRay",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt0375679/quotes/"],
+        "fingerprints": ["9eacb31868363a1d39bd60f60bc6f88c01c78dabde735e5819930f6ac4963312"]
+      }
+    },
+    {
+      "id": "movie-1917-2019",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/1917.2019.1080p.BluRay.mkv",
+      "path_title": "1917",
+      "title": "1917",
+      "original_title": "1917",
+      "year": 2019,
+      "alternate_years": [],
+      "imdb_id": "tt8579674",
+      "runtime_seconds": 7140,
+      "last_cue_seconds": 7040,
+      "metadata_url": "https://www.imdb.com/title/tt8579674/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "1917 (2019)",
+        "work_year": 2019,
+        "title": "1917.2019.BluRay.chs.srt",
+        "release_info": "1917.2019.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "1917 (2005)",
+          "work_year": 2005,
+          "title": "1917.2005.DVDRip.chs.srt",
+          "release_info": "1917.2005.DVDRip",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt8579674/quotes/"],
+        "fingerprints": ["b4b95fc5bf9c9fdd918e278aa75dcc4f83513fed3189fc252a9cb70b5b9980f8"]
+      }
+    },
+    {
+      "id": "movie-2001-space-odyssey-1968",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/2001.A.Space.Odyssey.1968.1080p.BluRay.mkv",
+      "path_title": "2001 A Space Odyssey",
+      "title": "2001太空漫游",
+      "original_title": "2001: A Space Odyssey",
+      "year": 1968,
+      "alternate_years": [],
+      "imdb_id": "tt0062622",
+      "runtime_seconds": 8940,
+      "last_cue_seconds": 8800,
+      "metadata_url": "https://www.imdb.com/title/tt0062622/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "2001太空漫游 2001: A Space Odyssey (1968)",
+        "work_year": 1968,
+        "title": "2001.A.Space.Odyssey.1968.BluRay.chs.srt",
+        "release_info": "2001.A.Space.Odyssey.1968.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "2001 Maniacs (2005)",
+          "work_year": 2005,
+          "title": "2001.Maniacs.2005.chs.srt",
+          "release_info": "2001.Maniacs.2005.DVDRip",
+          "expected_reason": "title_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt0062622/quotes/"],
+        "fingerprints": ["1f38620b163b0c3d943c6171f018d5605f4a2177563a8ae1b70a37b66aae7584"]
+      }
+    },
+    {
+      "id": "movie-blade-runner-2049-2017",
+      "difficulty": "hard",
+      "media_type": "movie",
+      "path": "library/Blade.Runner.2049.2017.2160p.BluRay.mkv",
+      "path_title": "Blade Runner 2049",
+      "title": "银翼杀手2049",
+      "original_title": "Blade Runner 2049",
+      "year": 2017,
+      "alternate_years": [],
+      "imdb_id": "tt1856101",
+      "runtime_seconds": 9840,
+      "last_cue_seconds": 9700,
+      "metadata_url": "https://www.imdb.com/title/tt1856101/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "银翼杀手2049 Blade Runner 2049 (2017)",
+        "work_year": 2017,
+        "title": "Blade.Runner.2049.2017.BluRay.chs.srt",
+        "release_info": "Blade.Runner.2049.2017.2160p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "银翼杀手 Blade Runner (1982)",
+          "work_year": 1982,
+          "title": "Blade.Runner.1982.BluRay.chs.srt",
+          "release_info": "Blade.Runner.1982.1080p.BluRay",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt1856101/characters/nm0331516/"],
+        "fingerprints": ["186adaac9ef601d3a882905ea40dd7c90545957387f47dec1c8278410b905006"]
+      }
+    },
+    {
+      "id": "movie-arrival-2016",
+      "difficulty": "easy",
+      "media_type": "movie",
+      "path": "library/Arrival.2016.1080p.BluRay.mkv",
+      "path_title": "Arrival",
+      "title": "降临",
+      "original_title": "Arrival",
+      "year": 2016,
+      "alternate_years": [],
+      "imdb_id": "tt2543164",
+      "runtime_seconds": 6960,
+      "last_cue_seconds": 6840,
+      "metadata_url": "https://www.imdb.com/title/tt2543164/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "降临 Arrival (2016)",
+        "work_year": 2016,
+        "title": "Arrival.2016.BluRay.chs.srt",
+        "release_info": "Arrival.2016.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "天煞 The Arrival (1996)",
+          "work_year": 1996,
+          "title": "The.Arrival.1996.BluRay.chs.srt",
+          "release_info": "The.Arrival.1996.1080p.BluRay",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "feature",
+        "source_urls": ["https://www.imdb.com/title/tt2543164/characters/nm0010736/"],
+        "fingerprints": ["82da39cfbbfe00bf40487801103205ad75c3666d2eb2f2c593ff7b100bfc61ff"]
+      }
+    },
+    {
+      "id": "episode-the-office-us-s02e01",
+      "difficulty": "hard",
+      "media_type": "episode",
+      "path": "library/The Office US (2005)/Season 02/The.Office.US.S02E01.mkv",
+      "path_title": "The Office US",
+      "title": "办公室",
+      "original_title": "The Office",
+      "year": 2005,
+      "alternate_years": [],
+      "season": 2,
+      "episode": 1,
+      "imdb_id": "tt0386676",
+      "runtime_seconds": 1320,
+      "last_cue_seconds": 1270,
+      "metadata_url": "https://www.imdb.com/title/tt0386676/",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "办公室 美版 The Office US 第二季 (2005)",
+        "work_year": 2005,
+        "title": "The.Office.US.S02E01.chs.srt",
+        "release_info": "The.Office.US.S02E01.720p"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "办公室 英版 The Office UK 第二季 (2001)",
+          "work_year": 2001,
+          "title": "The.Office.UK.S02E01.chs.srt",
+          "release_info": "The.Office.UK.S02E01.DVDRip",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "series",
+        "source_urls": ["https://www.imdb.com/title/tt0386676/quotes/"],
+        "fingerprints": ["eab8764800210f3dd95a0aed24937b5f14341c677a1074617fab787467304bdf"]
+      }
+    },
+    {
+      "id": "episode-sherlock-s01e01",
+      "difficulty": "medium",
+      "media_type": "episode",
+      "path": "library/Sherlock (2010)/Season 01/Sherlock.S01E01.mkv",
+      "path_title": "Sherlock",
+      "title": "神探夏洛克",
+      "original_title": "Sherlock",
+      "year": 2010,
+      "alternate_years": [],
+      "season": 1,
+      "episode": 1,
+      "imdb_id": "tt1475582",
+      "runtime_seconds": 5280,
+      "last_cue_seconds": 5200,
+      "metadata_url": "https://www.imdb.com/title/tt1475582/episodes/?season=1",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "神探夏洛克 Sherlock 第一季 (2010)",
+        "work_year": 2010,
+        "title": "Sherlock.S01E01.chs.ass",
+        "release_info": "Sherlock.S01E01.1080p.BluRay"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "神探夏洛克 Sherlock 第一季 (2010)",
+          "work_year": 2010,
+          "title": "Sherlock.S01E02.chs.ass",
+          "release_info": "Sherlock.S01E02.1080p.BluRay",
+          "expected_reason": "episode_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "series",
+        "source_urls": ["https://www.imdb.com/title/tt1475582/quotes/"],
+        "fingerprints": ["105bfd599daf8fa54cf3c8fbd1bfeed5e4c4f319ff4208b31c44f07b2cedb675"]
+      }
+    },
+    {
+      "id": "episode-fallout-s01e03",
+      "difficulty": "medium",
+      "media_type": "episode",
+      "path": "library/Fallout (2024)/Season 01/Fallout.S01E03.mkv",
+      "path_title": "Fallout",
+      "title": "辐射",
+      "original_title": "Fallout",
+      "year": 2024,
+      "alternate_years": [],
+      "season": 1,
+      "episode": 3,
+      "imdb_id": "tt12637874",
+      "runtime_seconds": 4200,
+      "last_cue_seconds": 4120,
+      "metadata_url": "https://www.imdb.com/title/tt12637874/episodes/?season=1",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "辐射 Fallout 第一季 (2024)",
+        "work_year": 2024,
+        "title": "Fallout.S01E01-E08.chs.ass",
+        "release_info": "Fallout.S01E01-E08.1080p.WEB-DL"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "辐射 Fallout 第一季 (2024)",
+          "work_year": 2024,
+          "title": "Fallout.S01E01-E02.chs.ass",
+          "release_info": "Fallout.S01E01-E02.1080p.WEB-DL",
+          "expected_reason": "episode_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "episode",
+        "source_urls": [
+          "https://zimuku.org/detail/198771.html",
+          "https://zimuku.org/detail/198757.html"
+        ],
+        "fingerprints": [
+          "1af17663d20c9b553cd78648d6af4c7469a67a58ca00fc71ca8f6d09fce0269e",
+          "2ae8f1c7141ad62b6e3b2c07b17793ffc66095615136e36c8b4ea5d1fc22dcb7",
+          "c68e7abeb3548fc9bc138b91d85a6c26b5a7aa9288e78711afd6a5f134a8befd"
+        ]
+      }
+    },
+    {
+      "id": "episode-shogun-2024-s01e01",
+      "difficulty": "hard",
+      "media_type": "episode",
+      "path": "library/Shogun (2024)/Season 01/Shogun.S01E01.mkv",
+      "path_title": "Shogun",
+      "title": "幕府将军",
+      "original_title": "Shogun",
+      "year": 2024,
+      "alternate_years": [],
+      "season": 1,
+      "episode": 1,
+      "imdb_id": "tt2788316",
+      "runtime_seconds": 4200,
+      "last_cue_seconds": 4100,
+      "metadata_url": "https://www.imdb.com/title/tt2788316/episodes/?season=1",
+      "positive_candidate": {
+        "provider": "zimuku",
+        "work_title": "幕府将军 Shogun 第一季 (2024)",
+        "work_year": 2024,
+        "title": "Shogun.2024.S01E01.chs.ass",
+        "release_info": "Shogun.2024.S01E01.1080p.WEB-DL"
+      },
+      "negative_candidates": [
+        {
+          "provider": "zimuku",
+          "work_title": "幕府将军 Shogun (1980)",
+          "work_year": 1980,
+          "title": "Shogun.1980.S01E01.chs.srt",
+          "release_info": "Shogun.1980.S01E01.DVDRip",
+          "expected_reason": "year_mismatch"
+        }
+      ],
+      "dialogue_reference": {
+        "scope": "series",
+        "source_urls": ["https://www.imdb.com/title/tt2788316/quotes/"],
+        "fingerprints": ["85ae9b5328a4f8291f0c659fc3e4d6fb20c4c32e5086631d8842b727124eb37d"]
+      }
+    }
+  ]
+}

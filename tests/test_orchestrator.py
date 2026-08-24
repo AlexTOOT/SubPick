@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from subtitle_sidecar.config import AppSettings
 from subtitle_sidecar.db.repository import JobCreate, Repository
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
@@ -483,6 +485,29 @@ def test_movie_path_identity_rejects_candidate_from_different_year(tmp_path: Pat
     assert filters[0]["details"]["reason"] == "year_mismatch"
     assert filters[0]["details"]["expected_year"] == 2026
     assert filters[0]["details"]["candidate_years"] == [2013]
+
+
+def test_candidate_timeline_must_fit_probed_video_duration(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.Name.2024.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    provider = FakeProvider(
+        downloaded_content="1\n02:00:01,000 --> 02:00:02,000\n你好\n"
+    )
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([provider], [build_candidate()]),
+        video_duration_prober=lambda _path, _ffprobe: 3600.0,
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    assert task.status == "failed"
+    assert task.error_message == "timeline_exceeds_video"
+    assert not list(tmp_path.glob("*.zh-cn.*"))
 
 
 def test_assrt_title_mismatch_records_its_own_filter_reason(tmp_path: Path) -> None:
@@ -2291,6 +2316,53 @@ def test_path_identity_fills_moviepilot_movie_metadata(tmp_path: Path) -> None:
         "title": "群体 Colony",
         "year": 2026,
     }
+
+
+@pytest.mark.parametrize(
+    ("directory_name", "file_name", "expected_title", "expected_year"),
+    [
+        ("Movies", "Colony.2026.1080p.WEB-DL.mkv", "Colony", 2026),
+        ("Movies", "群体 Colony 2026 WEB-DL.mkv", "群体 Colony", 2026),
+        (
+            "Movies",
+            "2001.A.Space.Odyssey.1968.1080p.BluRay.mkv",
+            "2001 A Space Odyssey",
+            1968,
+        ),
+        (
+            "Movies",
+            "Blade.Runner.2049.2017.2160p.BluRay.mkv",
+            "Blade Runner 2049",
+            2017,
+        ),
+    ],
+)
+def test_path_identity_reads_bare_release_year_without_confusing_title_numbers(
+    tmp_path: Path,
+    directory_name: str,
+    file_name: str,
+    expected_title: str,
+    expected_year: int,
+) -> None:
+    movie_dir = tmp_path / directory_name
+    movie_dir.mkdir()
+    video = movie_dir / file_name
+    video.write_bytes(b"video")
+    task = build_task(video)
+    task.title = None
+    task.year = None
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([FakeProvider()], []),
+    )
+
+    orchestrator._enrich_task_identity_from_path(task, video)
+
+    assert task.title == expected_title
+    assert task.year == expected_year
 
 
 def test_process_video_task_refreshes_jellyfin_item_by_path_after_success(tmp_path: Path) -> None:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
+import re
 from time import monotonic, perf_counter, sleep
 from typing import Any
 from urllib.parse import urlparse
@@ -62,8 +64,8 @@ class SubdlProvider:
         for strategy, query in _search_queries(request):
             label = _search_label(strategy, query)
             titles = self._v2_get("/movies/search", {"q": query, "type": _media_type(request), "limit": 5}).get("results") or []
-            sd_id = _select_sd_id(titles, request)
-            if not sd_id:
+            selected_work = _select_work(titles, request)
+            if selected_work is None:
                 attempts.append(f"{label}：未识别影片")
                 self._emit_progress(
                     label,
@@ -71,7 +73,8 @@ class SubdlProvider:
                     search_context={"strategy": strategy, "query": query},
                 )
                 continue
-            candidates, pages = self._search_pages(sd_id, request)
+            sd_id = str(selected_work["sd_id"])
+            candidates, pages = self._search_pages(sd_id, request, work=selected_work)
             attempts.append(f"{label}：{len(candidates)} 条/{pages} 页")
             self._emit_progress(
                 label,
@@ -87,7 +90,13 @@ class SubdlProvider:
                 return candidates, "；".join(attempts)
         return [], "；".join(attempts) or "无可用检索信息"
 
-    def _search_pages(self, sd_id: str, request: SubtitleSearchRequest) -> tuple[list[SubtitleCandidate], int]:
+    def _search_pages(
+        self,
+        sd_id: str,
+        request: SubtitleSearchRequest,
+        *,
+        work: dict[str, Any] | None = None,
+    ) -> tuple[list[SubtitleCandidate], int]:
         candidates: list[SubtitleCandidate] = []
         page = 1
         total_pages = 1
@@ -101,7 +110,7 @@ class SubdlProvider:
             total_pages = max(1, int(payload.get("totalPages") or 1))
             for subtitle in payload.get("subtitles") or []:
                 if isinstance(subtitle, dict):
-                    candidates.extend(_to_candidates(subtitle, request))
+                    candidates.extend(_to_candidates(subtitle, request, work=work))
             page += 1
         return candidates, min(total_pages, MAX_SUBDL_PAGES)
 
@@ -181,7 +190,13 @@ class SubdlProvider:
 
 
 def _search_queries(request: SubtitleSearchRequest) -> list[tuple[str, str]]:
-    values = [("imdb_id", request.imdb_id), ("original_title", request.original_title), ("title", request.title), ("file_name", request.video_path.name)]
+    values = [
+        ("imdb_id", request.imdb_id),
+        ("tmdb_id", request.tmdb_id),
+        ("original_title", request.original_title),
+        ("title", request.title),
+        ("file_name", request.video_path.name),
+    ]
     result: list[tuple[str, str]] = []
     seen: set[str] = set()
     for strategy, value in values:
@@ -195,6 +210,7 @@ def _search_queries(request: SubtitleSearchRequest) -> list[tuple[str, str]]:
 def _search_label(strategy: str, query: str) -> str:
     names = {
         "imdb_id": "IMDb",
+        "tmdb_id": "TMDB",
         "original_title": "原始标题",
         "title": "标题",
         "file_name": "文件名",
@@ -203,20 +219,122 @@ def _search_label(strategy: str, query: str) -> str:
 
 
 def _select_sd_id(results: Any, request: SubtitleSearchRequest) -> str | None:
+    selected = _select_work(results, request)
+    return str(selected["sd_id"]) if selected is not None else None
+
+
+def _select_work(results: Any, request: SubtitleSearchRequest) -> dict[str, Any] | None:
     if not isinstance(results, list):
         return None
-    for item in results:
-        if not isinstance(item, dict):
+    items = [item for item in results if isinstance(item, dict) and item.get("sd_id")]
+    if not items:
+        return None
+
+    for key, expected in (("imdb_id", request.imdb_id), ("tmdb_id", request.tmdb_id)):
+        if not expected:
             continue
-        if request.imdb_id and str(item.get("imdb_id") or "").casefold() == request.imdb_id.casefold():
-            return str(item.get("sd_id") or "") or None
-    for item in results:
-        if isinstance(item, dict) and item.get("sd_id"):
-            return str(item["sd_id"])
-    return None
+        for item in items:
+            if _same_external_id(item.get(key), expected):
+                return item
+
+    expected_years = {
+        year
+        for year in (request.year, *request.alternate_years)
+        if isinstance(year, int)
+    }
+    expected_titles = [
+        title
+        for title in (request.original_title, request.title)
+        if str(title or "").strip()
+    ]
+    if expected_years:
+        eligible_items = [
+            item
+            for item in items
+            if not (years := _subdl_work_years(item))
+            or any(
+                abs(actual - expected) <= 1
+                for actual in years
+                for expected in expected_years
+            )
+        ]
+        if not eligible_items:
+            return None
+        items = eligible_items
+
+    def score(item: dict[str, Any]) -> tuple[float, float]:
+        years = _subdl_work_years(item)
+        if not expected_years or not years:
+            year_score = 0.0
+        elif any(abs(actual - expected) <= 1 for actual in years for expected in expected_years):
+            year_score = 2.0
+        else:
+            year_score = -2.0
+        title_score = max(
+            (
+                _subdl_title_similarity(actual, expected)
+                for actual in _subdl_work_titles(item)
+                for expected in expected_titles
+            ),
+            default=0.0,
+        )
+        return year_score, title_score
+
+    best = max(enumerate(items), key=lambda pair: (*score(pair[1]), -pair[0]))[1]
+    # Text-search responses may omit the release year.  In that case, do not
+    # silently accept SubDL's first result unless its work title still bears a
+    # meaningful resemblance to one of the requested titles.  Exact IMDb/TMDB
+    # matches have already returned above and do not need this fallback guard.
+    if expected_titles:
+        title_similarity = score(best)[1]
+        if title_similarity < 0.45:
+            return None
+    return best
 
 
-def _to_candidates(subtitle: dict[str, Any], request: SubtitleSearchRequest) -> list[SubtitleCandidate]:
+def _same_external_id(actual: Any, expected: Any) -> bool:
+    left = str(actual or "").strip().casefold()
+    right = str(expected or "").strip().casefold()
+    if not left or not right:
+        return False
+    return left == right or left.lstrip("t") == right.lstrip("t")
+
+
+def _subdl_work_years(item: dict[str, Any]) -> set[int]:
+    years: set[int] = set()
+    for key in ("year", "release_year", "first_air_date", "release_date"):
+        match = re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", str(item.get(key) or ""))
+        if match is not None:
+            years.add(int(match.group(0)))
+    return years
+
+
+def _subdl_work_titles(item: dict[str, Any]) -> list[str]:
+    return [
+        text
+        for key in ("name", "title", "original_name", "original_title")
+        if (text := str(item.get(key) or "").strip())
+    ]
+
+
+def _subdl_title_similarity(actual: str, expected: str) -> float:
+    left = "".join(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", actual.casefold()))
+    right = "".join(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", expected.casefold()))
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if left in right or right in left:
+        return 0.9
+    return SequenceMatcher(a=left, b=right).ratio()
+
+
+def _to_candidates(
+    subtitle: dict[str, Any],
+    request: SubtitleSearchRequest,
+    *,
+    work: dict[str, Any] | None = None,
+) -> list[SubtitleCandidate]:
     language = subtitle.get("language") or subtitle.get("lang")
     if not _is_chinese(language) or not _matches_episode(subtitle, request):
         return []
@@ -230,20 +348,74 @@ def _to_candidates(subtitle: dict[str, Any], request: SubtitleSearchRequest) -> 
         filename = _safe_filename(str(file_info.get("name") or "subtitle.srt"))
         extension = str(file_info.get("format") or Path(filename).suffix.lstrip(".")).lower()
         if path and extension in SUPPORTED_FORMATS:
-            result.append(_candidate(filename, extension, path, language, subtitle_page, release, archive=False))
+            result.append(
+                _candidate(
+                    filename,
+                    extension,
+                    path,
+                    language,
+                    subtitle_page,
+                    release,
+                    archive=False,
+                    work=work,
+                )
+            )
     if result:
         return result
     path = _download_path(subtitle.get("url"))
     if path and path.lower().endswith(".zip"):
         filename = _safe_filename(str(subtitle.get("name") or "subtitle.zip"))
-        return [_candidate(f"{Path(filename).stem}.srt", "srt", path, language, subtitle_page, release, archive=True)]
+        return [
+            _candidate(
+                f"{Path(filename).stem}.srt",
+                "srt",
+                path,
+                language,
+                subtitle_page,
+                release,
+                archive=True,
+                work=work,
+            )
+        ]
     return []
 
 
-def _candidate(filename: str, extension: str, path: str, language: Any, source_url: str, release: str, *, archive: bool) -> SubtitleCandidate:
+def _candidate(
+    filename: str,
+    extension: str,
+    path: str,
+    language: Any,
+    source_url: str,
+    release: str,
+    *,
+    archive: bool,
+    work: dict[str, Any] | None = None,
+) -> SubtitleCandidate:
     value = str(language or "").upper()
     bilingual = "BG" in value
-    return SubtitleCandidate(provider="subdl", language="zh-hant" if "BIG_5" in value or "HANT" in value or "TW" in value else "zh-cn", is_bilingual=bilingual, format=extension, title=filename, source_url=source_url, release_info=release, confidence=0.76 + (0.08 if bilingual else 0.0), raw_metadata={"subdl_download_path": path, "subdl_filename": filename, "subdl_language": str(language or ""), "subdl_archive": archive})
+    work = work or {}
+    return SubtitleCandidate(
+        provider="subdl",
+        language=(
+            "zh-hant"
+            if "BIG_5" in value or "HANT" in value or "TW" in value
+            else "zh-cn"
+        ),
+        is_bilingual=bilingual,
+        format=extension,
+        title=filename,
+        source_url=source_url,
+        release_info=release,
+        confidence=0.76 + (0.08 if bilingual else 0.0),
+        raw_metadata={
+            "subdl_download_path": path,
+            "subdl_filename": filename,
+            "subdl_language": str(language or ""),
+            "subdl_archive": archive,
+            "subdl_work_titles": _subdl_work_titles(work),
+            "subdl_work_years": sorted(_subdl_work_years(work)),
+        },
+    )
 
 
 def _extract_subtitle_archive(
@@ -272,8 +444,23 @@ def _media_type(request: SubtitleSearchRequest) -> str:
 
 
 def _matches_episode(item: dict[str, Any], request: SubtitleSearchRequest) -> bool:
-    episode = item.get("episode")
-    return request.episode is None or not isinstance(episode, int) or episode in {0, request.episode}
+    return _matches_media_number(item.get("season"), request.season) and _matches_media_number(
+        item.get("episode"), request.episode
+    )
+
+
+def _matches_media_number(actual: Any, expected: int | None) -> bool:
+    if expected is None:
+        return True
+    if isinstance(actual, bool):
+        return True
+    if isinstance(actual, int):
+        return actual in {0, expected}
+    text = str(actual or "").strip()
+    if not text:
+        return True
+    match = re.fullmatch(r"(?:S|E|Season\s*|Episode\s*)?0*(\d{1,3})", text, re.IGNORECASE)
+    return match is None or int(match.group(1)) in {0, expected}
 
 
 def _is_chinese(language: Any) -> bool:

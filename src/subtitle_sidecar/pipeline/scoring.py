@@ -199,27 +199,34 @@ def candidate_mismatch_reason(
     episode_reason = episode_mismatch_reason(candidate, season=season, episode=episode)
     if episode_reason is not None:
         return episode_reason
-    # ASSRT exposes a stable work title in its search metadata. Other
-    # providers frequently expose release labels or generic filenames, so
-    # using them as a hard title filter would reject valid candidates.
-    if candidate.provider.split(":", 1)[0] == "assrt" and not _candidate_title_matches(
-        candidate.title,
+    # Only compare stable work-level metadata. Release labels and archive
+    # filenames are intentionally excluded because they are often generic.
+    stable_title = _stable_candidate_title(candidate)
+    if stable_title is not None and not _candidate_title_matches(
+        stable_title,
         title,
         original_title,
     ):
         return "title_mismatch"
+    expected_years = tuple(
+        dict.fromkeys(
+            expected_year
+            for expected_year in (year, *alternate_years)
+            if expected_year is not None
+        )
+    )
+    stable_years = _stable_candidate_years(candidate)
+    if stable_years and expected_years and all(
+        abs(candidate_year - expected_year) > 1
+        for candidate_year in stable_years
+        for expected_year in expected_years
+    ):
+        return "year_mismatch"
     if season is not None or episode is not None:
         candidate_text = f"{candidate.release_info} {candidate.title}".casefold()
         seasons, episodes = _episode_markers(candidate_text)
         if not seasons and not episodes:
             candidate_years = _release_years(candidate_text)
-            expected_years = tuple(
-                dict.fromkeys(
-                    expected_year
-                    for expected_year in (year, *alternate_years)
-                    if expected_year is not None
-                )
-            )
             if (
                 expected_years
                 and candidate_years
@@ -244,12 +251,15 @@ def candidate_mismatch_reason(
 
     if year is None:
         return None
-    year_evidence = analyze_release_years(
-        (candidate.title, candidate.release_info),
-        expected_year=year,
-        expected_titles=(title, original_title),
-    )
-    if year_evidence.has_conflict:
+    year_evidence = [
+        analyze_release_years(
+            (candidate.title, candidate.release_info),
+            expected_year=expected_year,
+            expected_titles=(title, original_title),
+        )
+        for expected_year in expected_years
+    ]
+    if year_evidence and all(evidence.has_conflict for evidence in year_evidence):
         return "year_mismatch"
     return None
 
@@ -285,21 +295,122 @@ def _candidate_title_matches(
     and close normalized matches against either the display or original title.
     """
     candidate_identity = _title_identity(candidate_title)
-    expected_identities = {
-        identity
-        for value in (title, original_title)
-        if (identity := _title_identity(value))
-    }
-    if len(candidate_identity) < 3 or not expected_identities:
+    expected_values = [str(value).strip() for value in (title, original_title) if str(value or "").strip()]
+    if len(candidate_identity) < 3 or not expected_values:
         return True
-    for expected in expected_identities:
-        if len(expected) < 3:
+    for expected_value in expected_values:
+        expected = _title_identity(expected_value)
+        if not expected:
             continue
-        if candidate_identity in expected or expected in candidate_identity:
+        if candidate_identity == expected:
             return True
-        if SequenceMatcher(a=candidate_identity, b=expected).ratio() >= 0.55:
+        if candidate_identity.startswith(expected) and re.fullmatch(
+            r"(?:19|20)\d{2}", candidate_identity[len(expected) :]
+        ):
+            return True
+        if _english_title_matches(candidate_title, expected_value):
+            return True
+        if _chinese_title_matches(candidate_title, expected_value):
+            return True
+        if len(expected) >= 3 and SequenceMatcher(a=candidate_identity, b=expected).ratio() >= 0.72:
             return True
     return False
+
+
+def _english_title_matches(actual: str, expected: str) -> bool:
+    ignored = {
+        "a",
+        "an",
+        "and",
+        "for",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "ass",
+        "bluray",
+        "complete",
+        "dl",
+        "eng",
+        "hdtv",
+        "remux",
+        "srt",
+        "ssa",
+        "sub",
+        "subtitle",
+        "subtitles",
+        "web",
+        "zh",
+        "uk",
+        "us",
+        "usa",
+    }
+
+    def tokens(value: str) -> set[str]:
+        value = re.sub(
+            r"\b(?:season\s*\d{1,2}|episode\s*\d{1,3}|s\d{1,2}(?:e\d{1,3})?)\b",
+            " ",
+            value,
+            flags=re.IGNORECASE,
+        )
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", value.casefold())
+            if token not in ignored
+            and not re.fullmatch(r"(?:19|20)\d{2}", token)
+            and not re.fullmatch(r"(?:s\d{1,2}(?:e\d{1,3})?|e\d{1,3}|\d{3,4}p)", token)
+        }
+
+    actual_tokens = tokens(actual)
+    expected_tokens = tokens(expected)
+    if not actual_tokens or not expected_tokens or not expected_tokens <= actual_tokens:
+        return False
+    allowed_extras = max(0, len(expected_tokens) // 3)
+    return len(actual_tokens - expected_tokens) <= allowed_extras
+
+
+def _chinese_title_matches(actual: str, expected: str) -> bool:
+    def identity(value: str) -> str:
+        value = re.sub(
+            r"第\s*[一二三四五六七八九十百零两\d]+\s*(?:季|集)",
+            "",
+            value,
+        )
+        value = re.sub(r"(?:美|英|日|韩|法|德|台|港)版", "", value)
+        chinese = "".join(re.findall(r"[\u4e00-\u9fff]+", value))
+        return re.sub(r"(?:简繁|简体|繁体|中英|双语|中文)?字幕$", "", chinese)
+
+    actual_identity = identity(actual)
+    expected_identity = identity(expected)
+    return bool(expected_identity) and actual_identity == expected_identity
+
+
+def _stable_candidate_title(candidate: SubtitleCandidate) -> str | None:
+    provider = candidate.provider.split(":", 1)[0].casefold()
+    if provider == "assrt":
+        return candidate.title
+    if provider == "zimuku":
+        value = str(candidate.raw_metadata.get("zimuku_work_title") or "").strip()
+        return value or None
+    if provider == "subdl":
+        titles = candidate.raw_metadata.get("subdl_work_titles")
+        if isinstance(titles, list):
+            value = " ".join(str(title).strip() for title in titles if str(title).strip())
+            return value or None
+    return None
+
+
+def _stable_candidate_years(candidate: SubtitleCandidate) -> set[int]:
+    provider = candidate.provider.split(":", 1)[0].casefold()
+    if provider == "zimuku":
+        value = candidate.raw_metadata.get("zimuku_work_year")
+        return {value} if isinstance(value, int) else set()
+    if provider == "subdl":
+        values = candidate.raw_metadata.get("subdl_work_years")
+        if isinstance(values, list):
+            return {value for value in values if isinstance(value, int)}
+    return set()
 
 
 def _title_identity(value: str | None) -> str:
@@ -334,6 +445,15 @@ def _episode_match_score(candidate: SubtitleCandidate, season: int, episode: int
 def _episode_markers(text: str) -> tuple[set[int], set[int]]:
     seasons: set[int] = set()
     episodes: set[int] = set()
+    for match in re.finditer(
+        r"s(?P<season>\d{1,2})[ ._-]*e(?P<start>\d{1,3})[ ._-]*-[ ._-]*e?(?P<end>\d{1,3})",
+        text,
+    ):
+        seasons.add(int(match.group("season")))
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+        if start <= end and end - start <= 100:
+            episodes.update(range(start, end + 1))
     for match in re.finditer(r"s(?P<season>\d{1,2})[ ._-]*e(?P<episode>\d{1,3})", text):
         seasons.add(int(match.group("season")))
         episodes.add(int(match.group("episode")))
