@@ -717,7 +717,9 @@ class SubtitleOrchestrator:
                 continue
             validation = validate_subtitle_file(
                 downloaded.path,
-                video_duration_seconds=video_duration_seconds,
+                video_duration_seconds=(
+                    None if self.settings.sync.enabled else video_duration_seconds
+                ),
             )
             if not validation.is_valid:
                 last_failure_reason = validation.reason or "invalid_subtitle"
@@ -875,6 +877,43 @@ class SubtitleOrchestrator:
                             message=sync_message,
                             error_code=last_failure_reason,
                             details=sync_details,
+                        )
+                        self._update_candidate_attempt(
+                            recorded_candidate.id,
+                            status="failed",
+                            error_message=last_failure_reason,
+                        )
+                        continue
+
+                    unsynced_validation = validate_subtitle_file(
+                        downloaded.path,
+                        video_duration_seconds=video_duration_seconds,
+                    )
+                    if not unsynced_validation.is_valid:
+                        last_failure_reason = (
+                            unsynced_validation.reason or "invalid_unsynced_subtitle"
+                        )
+                        unsynced_details = {
+                            **sync_details,
+                            "unsynced_validation_reason": last_failure_reason,
+                            "duration_seconds": unsynced_validation.duration_seconds,
+                            "video_duration_seconds": video_duration_seconds,
+                        }
+                        self._record_task_event(
+                            task_id,
+                            "candidate_unsynced_validation",
+                            "failed",
+                            message=last_failure_reason,
+                            error_code=last_failure_reason,
+                            details=unsynced_details,
+                        )
+                        self._record_task_event(
+                            task_id,
+                            "candidate_attempt",
+                            "failed",
+                            message=last_failure_reason,
+                            error_code=last_failure_reason,
+                            details=unsynced_details,
                         )
                         self._update_candidate_attempt(
                             recorded_candidate.id,

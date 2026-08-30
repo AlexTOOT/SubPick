@@ -80,7 +80,9 @@ class FakeRepository:
         path: str | None = None,
     ) -> SimpleNamespace | None:
         self.jellyfin_mark_ready_calls.append({"jellyfin_item_id": jellyfin_item_id, "path": path})
-        item = self.get_jellyfin_media_item(jellyfin_item_id) or self.get_jellyfin_media_item_by_path(path)
+        item = self.get_jellyfin_media_item(
+            jellyfin_item_id
+        ) or self.get_jellyfin_media_item_by_path(path)
         if item is None:
             return None
         item.subtitle_status = "has_chinese"
@@ -107,7 +109,9 @@ class FakeRepository:
                 "has_bilingual_subtitle": has_bilingual_subtitle,
             }
         )
-        item = self.get_jellyfin_media_item(jellyfin_item_id) or self.get_jellyfin_media_item_by_path(path)
+        item = self.get_jellyfin_media_item(
+            jellyfin_item_id
+        ) or self.get_jellyfin_media_item_by_path(path)
         if item is None:
             return None
         item.subtitle_status = subtitle_status
@@ -279,7 +283,9 @@ class FakeBundleCache:
 
 
 class FakeEmbeddedDetector:
-    def __init__(self, result: SimpleNamespace | None = None, *, should_raise: bool = False) -> None:
+    def __init__(
+        self, result: SimpleNamespace | None = None, *, should_raise: bool = False
+    ) -> None:
         self.result = result or SimpleNamespace(has_chinese=False, has_bilingual=False, streams=[])
         self.should_raise = should_raise
         self.calls: list[tuple[Path, str]] = []
@@ -504,7 +510,11 @@ def test_episode_tasks_reuse_cached_members_from_a_season_bundle(tmp_path: Path)
     assert second_repository.status_updates[-1] == (2, "completed", None)
     assert any(event["stage"] == "bundle_cache" for event in first_repository.task_events)
     assert any(event["stage"] == "bundle_reuse" for event in second_repository.task_events)
-    assert Path(second_task.result_subtitle_path).read_text(encoding="utf-8").endswith("\u4e2d\u6587\u5b57\u5e55\n")
+    assert (
+        Path(second_task.result_subtitle_path)
+        .read_text(encoding="utf-8")
+        .endswith("\u4e2d\u6587\u5b57\u5e55\n")
+    )
 
 
 def test_episode_task_skips_candidates_with_explicit_wrong_season(tmp_path: Path) -> None:
@@ -539,7 +549,9 @@ def test_movie_task_skips_explicit_series_candidate(tmp_path: Path) -> None:
     video.write_bytes(b"video")
     task = build_task(video)
     provider = FakeProvider()
-    series_candidate = replace(build_candidate(), title="Kingdom S01E01", release_info="Kingdom.S01E01")
+    series_candidate = replace(
+        build_candidate(), title="Kingdom S01E01", release_info="Kingdom.S01E01"
+    )
     repository = FakeRepository(task)
     orchestrator = SubtitleOrchestrator(
         settings=build_settings(tmp_path),
@@ -599,9 +611,7 @@ def test_candidate_timeline_must_fit_probed_video_duration(tmp_path: Path) -> No
     video = tmp_path / "Movie.Name.2024.mkv"
     video.write_bytes(b"video")
     task = build_task(video)
-    provider = FakeProvider(
-        downloaded_content="1\n02:00:01,000 --> 02:00:02,000\n你好\n"
-    )
+    provider = FakeProvider(downloaded_content="1\n02:00:01,000 --> 02:00:02,000\n你好\n")
     repository = FakeRepository(task)
     orchestrator = SubtitleOrchestrator(
         settings=build_settings(tmp_path),
@@ -616,6 +626,62 @@ def test_candidate_timeline_must_fit_probed_video_duration(tmp_path: Path) -> No
     assert task.status == "failed"
     assert task.error_message == "timeline_exceeds_video"
     assert not list(tmp_path.glob("*.zh-cn.*"))
+
+
+def test_enabled_sync_can_repair_a_candidate_timeline_overrun(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.Name.2024.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    provider = FakeProvider(downloaded_content="1\n01:09:58,000 --> 01:10:00,000\n你好\n")
+    syncer = FakeSyncer(synced_content="1\n00:58:58,000 --> 00:59:00,000\n你好\n")
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path, sync_enabled=True),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([provider], [build_candidate()]),
+        video_duration_prober=lambda _path, _ffprobe: 3600.0,
+        subtitle_syncer=syncer,
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    assert task.status == "completed"
+    assert len(syncer.calls) == 1
+    assert repository.artifact_records[0]["is_synced"] is True
+
+
+def test_unsynced_fallback_cannot_bypass_timeline_validation(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.Name.2024.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    provider = FakeProvider(downloaded_content="1\n01:09:58,000 --> 01:10:00,000\n你好\n")
+    syncer = FakeSyncer(success=False, reason="sync_failed")
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(
+            tmp_path,
+            sync_enabled=True,
+            save_unsynced_on_sync_failure=True,
+        ),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([provider], [build_candidate()]),
+        video_duration_prober=lambda _path, _ffprobe: 3600.0,
+        subtitle_syncer=syncer,
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    assert task.status == "failed"
+    assert task.error_message == "timeline_exceeds_video"
+    assert repository.artifact_records == []
+    fallback_events = [
+        event
+        for event in repository.task_events
+        if event["stage"] == "candidate_unsynced_validation"
+    ]
+    assert fallback_events[-1]["error_code"] == "timeline_exceeds_video"
 
 
 def test_assrt_title_mismatch_records_its_own_filter_reason(tmp_path: Path) -> None:
@@ -678,9 +744,7 @@ def test_existing_external_chinese_subtitle_skips_download(tmp_path: Path) -> No
     assert provider.download_calls == []
     assert repository.candidate_records == []
     assert repository.artifact_records == []
-    event = next(
-        event for event in repository.task_events if event["stage"] == "checking_existing"
-    )
+    event = next(event for event in repository.task_events if event["stage"] == "checking_existing")
     assert event["status"] == "completed"
     assert event["details"] == {
         "subtitle_count": 1,
@@ -879,17 +943,13 @@ def test_all_skipped_providers_fail_with_no_compatible_provider(tmp_path: Path) 
         "failed",
         "no_compatible_provider",
     )
-    assert not any(
-        event["stage"] == "provider_search" for event in repository.task_events
-    )
+    assert not any(event["stage"] == "provider_search" for event in repository.task_events)
     summary = next(
         event
         for event in repository.task_events
         if event["stage"] == "searching" and event["status"] == "completed"
     )
-    assert summary["message"] == (
-        "字幕搜索结束：候选 0 条，来源成功 0 个，失败 0 个，跳过 1 个"
-    )
+    assert summary["message"] == ("字幕搜索结束：候选 0 条，来源成功 0 个，失败 0 个，跳过 1 个")
     assert summary["details"] == {
         "candidate_count": 0,
         "provider_success_count": 0,
@@ -898,7 +958,9 @@ def test_all_skipped_providers_fail_with_no_compatible_provider(tmp_path: Path) 
     }
 
 
-def test_all_failed_provider_reports_are_distinguished_from_normal_zero_results(tmp_path: Path) -> None:
+def test_all_failed_provider_reports_are_distinguished_from_normal_zero_results(
+    tmp_path: Path,
+) -> None:
     class FailedProviderRegistry(FakeProviderRegistry):
         def __init__(self) -> None:
             super().__init__([FakeProvider()], [])
@@ -936,9 +998,7 @@ def test_all_failed_provider_reports_are_distinguished_from_normal_zero_results(
     assert repository.status_updates[-1] == (task.id, "failed", "all_providers_failed")
     reports = [event for event in repository.task_events if event["stage"] == "provider_search"]
     assert [event["status"] for event in reports] == ["failed"]
-    assert reports[0]["message"] == (
-        "字幕来源 one：搜索失败，错误 provider unavailable，耗时 0 ms"
-    )
+    assert reports[0]["message"] == ("字幕来源 one：搜索失败，错误 provider unavailable，耗时 0 ms")
     summary = next(
         event
         for event in repository.task_events
@@ -1003,9 +1063,7 @@ def test_embedded_probe_records_stream_counts(tmp_path: Path) -> None:
 
     orchestrator.process_video_task(task.id)
 
-    event = next(
-        event for event in repository.task_events if event["stage"] == "checking_embedded"
-    )
+    event = next(event for event in repository.task_events if event["stage"] == "checking_embedded")
     assert event["status"] == "completed"
     assert event["details"] == {
         "subtitle_stream_count": 2,
@@ -1194,13 +1252,9 @@ def test_search_events_include_media_provider_results_and_summary(tmp_path: Path
 
     orchestrator.process_video_task(task.id)
 
-    search_events = [
-        event for event in repository.task_events if event["stage"] == "searching"
-    ]
+    search_events = [event for event in repository.task_events if event["stage"] == "searching"]
     assert search_events[0]["status"] == "started"
-    assert search_events[0]["message"] == (
-        "字幕搜索开始：Show (2025) S01E02，语言 zh-cn, zh-hant"
-    )
+    assert search_events[0]["message"] == ("字幕搜索开始：Show (2025) S01E02，语言 zh-cn, zh-hant")
     assert search_events[0]["details"] == {
         "title": "Show",
         "year": 2025,
@@ -1652,7 +1706,10 @@ def test_candidate_results_and_rankings_are_recorded_for_task_details(tmp_path: 
         returned_first.title,
     ]
     assert ranking["details"]["candidates"][0]["assrt_downloads"] == 900
-    assert ranking["details"]["candidates"][0]["score_breakdown"]["total_score"] == ranking["details"]["candidates"][0]["score"]
+    assert (
+        ranking["details"]["candidates"][0]["score_breakdown"]["total_score"]
+        == ranking["details"]["candidates"][0]["score"]
+    )
     assert provider.download_calls[0][0] == ranked_first
 
 
@@ -1760,20 +1817,26 @@ def test_lazy_batches_share_global_candidate_attempt_budget(tmp_path: Path) -> N
     assert len(low.download_calls) == 2
     assert never.download_calls == []
     assert len(repository.candidate_records) == 4
-    assert len(
-        [
-            event
-            for event in repository.task_events
-            if event["stage"] == "searching" and event["status"] == "completed"
-        ]
-    ) == 1
-    assert len(
-        [
-            event
-            for event in repository.task_events
-            if event["stage"] == "task" and event["status"] == "failed"
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                event
+                for event in repository.task_events
+                if event["stage"] == "searching" and event["status"] == "completed"
+            ]
+        )
+        == 1
+    )
+    assert (
+        len(
+            [
+                event
+                for event in repository.task_events
+                if event["stage"] == "task" and event["status"] == "failed"
+            ]
+        )
+        == 1
+    )
 
 
 def test_search_batches_provider_wait_records_rounded_structured_event(tmp_path: Path) -> None:
@@ -1796,9 +1859,7 @@ def test_search_batches_provider_wait_records_rounded_structured_event(tmp_path:
 
     orchestrator.process_video_task(task.id)
 
-    event = next(
-        event for event in repository.task_events if event["stage"] == "provider_wait"
-    )
+    event = next(event for event in repository.task_events if event["stage"] == "provider_wait")
     assert event["status"] == "waiting"
     assert event["message"] == "Provider high 冷却，约 2 秒后获得搜索槽位"
     assert event["details"] == {"provider": "high", "wait_seconds": 2}
@@ -1995,9 +2056,7 @@ def test_manual_retry_filters_previous_placed_candidate_before_download(tmp_path
 
     orchestrator.process_video_task(task.id)
 
-    assert [call[0].source_url for call in provider.download_calls] == [
-        next_candidate.source_url
-    ]
+    assert [call[0].source_url for call in provider.download_calls] == [next_candidate.source_url]
     assert [record["source_url"] for record in repository.candidate_records] == [
         next_candidate.source_url
     ]
@@ -2039,8 +2098,7 @@ def test_manual_retry_without_previous_placed_candidate_does_not_filter(tmp_path
 
     assert len(provider.download_calls) == 1
     assert not any(
-        event["error_code"] == "retry_candidate_already_used"
-        for event in repository.task_events
+        event["error_code"] == "retry_candidate_already_used" for event in repository.task_events
     )
 
 
@@ -2177,7 +2235,9 @@ def test_placement_failure_marks_candidate_attempt_failed(tmp_path: Path, monkey
     def fail_placement(*args: Any, **kwargs: Any) -> Path:
         raise FileExistsError(f"destination already exists: {placed_path}")
 
-    monkeypatch.setattr("subtitle_sidecar.pipeline.orchestrator.safe_place_subtitle", fail_placement)
+    monkeypatch.setattr(
+        "subtitle_sidecar.pipeline.orchestrator.safe_place_subtitle", fail_placement
+    )
     orchestrator = SubtitleOrchestrator(
         settings=build_settings(tmp_path),
         repository=repository,
