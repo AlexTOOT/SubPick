@@ -143,7 +143,11 @@ class TaskQueue:
                 },
             )
 
-        for task_id in queued_task_ids:
+        prioritized_task_ids = sorted(
+            queued_task_ids,
+            key=lambda task_id: 0 if self._is_cache_hit(task_id) else 1,
+        )
+        for task_id in prioritized_task_ids:
             self.enqueue(task_id)
 
     async def _run(self) -> None:

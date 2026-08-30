@@ -175,6 +175,36 @@ def test_manual_retry_is_treated_as_high_priority_queue_work(tmp_path, monkeypat
     assert priority_probe(retry_id) is True
 
 
+def test_queue_recovery_preflights_high_priority_tasks_first(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    regular_task_id = _create_task(engine, "/media/regular.mkv")
+    priority_task_id = _create_task(engine, "/media/priority.mkv")
+    preflighted: list[int] = []
+    processed: list[int] = []
+
+    def preflight(task_id: int) -> bool:
+        preflighted.append(task_id)
+        return True
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processed.append,
+            preflight_processor=preflight,
+            interval_seconds=0,
+            cache_probe=lambda task_id: task_id == priority_task_id,
+        )
+        await queue.start(recover=True)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert preflighted == [priority_task_id, regular_task_id]
+    assert processed == [priority_task_id, regular_task_id]
+
+
 def test_task_queue_preflights_local_checks_before_provider_queue(tmp_path):
     engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
     create_tables(engine)
