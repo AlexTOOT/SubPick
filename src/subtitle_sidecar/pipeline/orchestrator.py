@@ -10,7 +10,12 @@ from typing import Any
 
 from subtitle_sidecar.jellyfin.client import JellyfinClient
 from subtitle_sidecar.jellyfin.subtitle_status import detect_subtitle_status
-from subtitle_sidecar.media.identity import analyze_release_years
+from subtitle_sidecar.media.identity import MediaIdentity, analyze_release_years
+from subtitle_sidecar.media.nfo import (
+    NfoIdentityError,
+    NfoIdentityPending,
+    resolve_nfo_identity,
+)
 from subtitle_sidecar.media.subtitles import detect_external_subtitles
 from subtitle_sidecar.pipeline.bundle_cache import EpisodeBundleCache, select_episode_member
 from subtitle_sidecar.pipeline.candidate_identity import (
@@ -44,6 +49,10 @@ from subtitle_sidecar.pipeline.validator import validate_subtitle_file
 from subtitle_sidecar.probe.streams import probe_video_duration_seconds, probe_video_streams
 from subtitle_sidecar.providers.base import DownloadedSubtitle, SubtitleCandidate, SubtitleSearchRequest
 from subtitle_sidecar.sync.ffsubsync import sync_subtitle
+
+
+NFO_READY_WAIT_SECONDS = 120.0
+MOVIE_NFO_PREFERRED_WAIT_SECONDS = 90.0
 
 
 def safe_place_subtitle(
@@ -124,7 +133,28 @@ class SubtitleOrchestrator:
             return False
         self._set_resolved_path(task, resolved_path)
         resolve_details = self._record_resolved_path(task_id, task, resolved)
-        self._enrich_task_identity_from_path(task, Path(resolved_path))
+        try:
+            self._ensure_nfo_media_identity(task, Path(resolved_path), refresh=True)
+        except NfoIdentityPending as error:
+            self.repository.update_video_task_status(task_id, TASK_QUEUED)
+            if not self._has_task_event(task_id, "metadata_wait"):
+                self._record_task_event(
+                    task_id,
+                    "metadata_wait",
+                    "pending",
+                    message=str(error),
+                    details={"source": "nfo", **error.details},
+                )
+            raise
+        except NfoIdentityError as error:
+            self._fail_task(
+                task_id,
+                error.code,
+                stage="metadata",
+                message=str(error),
+                details={"source": "nfo", **error.details},
+            )
+            return False
 
         supplemental_search = getattr(getattr(task, "job", None), "source", "") in {
             "manual-retry",
@@ -218,6 +248,17 @@ class SubtitleOrchestrator:
         preflight_completed = bool(getattr(task, "video_path_resolved", None))
         if preflight_completed:
             resolved_path = Path(task.video_path_resolved)
+            try:
+                self._ensure_nfo_media_identity(task, resolved_path)
+            except NfoIdentityError as error:
+                self._fail_task(
+                    task_id,
+                    error.code,
+                    stage="metadata",
+                    message=str(error),
+                    details={"source": "nfo", **error.details},
+                )
+                return
             existing_matches = (
                 tuple(detect_external_subtitles(resolved_path).matches)
                 if supplemental_search
@@ -242,6 +283,17 @@ class SubtitleOrchestrator:
                 return
             self._set_resolved_path(task, resolved_path)
             self._record_resolved_path(task_id, task, resolved)
+            try:
+                self._ensure_nfo_media_identity(task, Path(resolved_path), refresh=True)
+            except NfoIdentityError as error:
+                self._fail_task(
+                    task_id,
+                    error.code,
+                    stage="metadata",
+                    message=str(error),
+                    details={"source": "nfo", **error.details},
+                )
+                return
 
             self._set_task_stage(task_id, TASK_CHECKING_EXISTING)
             existing, _external_details = self._inspect_external_subtitles(
@@ -268,7 +320,6 @@ class SubtitleOrchestrator:
                 )
                 return
 
-        self._enrich_task_identity_from_path(task, Path(resolved_path))
         request = self._build_search_request(task, resolved_path)
         attempt_budget = self.settings.subtitles.max_candidate_attempts
         attempts_used = 0
@@ -1103,80 +1154,155 @@ class SubtitleOrchestrator:
         resolved_path = getattr(resolved, "resolved_path", None)
         if resolved_path is None:
             return False
-        request = self._build_search_request(task, Path(resolved_path))
+        try:
+            request = self._build_search_request(task, Path(resolved_path))
+        except NfoIdentityError:
+            return False
         return self.bundle_cache.find(request) is not None
 
     def _build_search_request(self, task: Any, resolved_path: Path) -> SubtitleSearchRequest:
-        media_item = self._jellyfin_media_item_for_task(task)
-        is_episode = task.season is not None or task.episode is not None
-        series_item = self._jellyfin_series_for_media_item(media_item) if is_episode else None
-        identity_item = series_item or media_item
-        raw_payload = getattr(getattr(task, "job", None), "raw_payload_json", None) or {}
-        job_metadata = raw_payload.get("jellyfin_metadata") or {}
-        provider_ids = (
-            getattr(identity_item, "provider_ids_json", None)
-            or job_metadata.get("provider_ids")
-            or {}
-        )
-        original_title = (
-            getattr(identity_item, "original_title", None)
-            or job_metadata.get("original_title")
-            or _english_title_from_path(resolved_path)
-        )
-        year = (
-            (
-                getattr(series_item, "year", None)
-                or task.year
-                or getattr(media_item, "year", None)
-                or job_metadata.get("year")
-            )
-            if is_episode
-            else (
-                task.year
-                or getattr(identity_item, "year", None)
-                or getattr(media_item, "year", None)
-                or job_metadata.get("year")
-            )
-        )
-        alternate_years = tuple(
-            candidate_year
-            for candidate_year in (
-                task.year,
-                getattr(media_item, "year", None),
-                job_metadata.get("year"),
-            )
-            if isinstance(candidate_year, int)
-            and candidate_year != year
-        )
-        title = task.title or resolved_path.stem
-        if is_episode:
-            title = (
-                getattr(series_item, "name", None)
-                or getattr(media_item, "series_name", None)
-                or _normalized_search_title(title, is_episode=True)
-                or title
-            )
+        identity = self._ensure_nfo_media_identity(task, resolved_path)
+        is_episode = identity.media_type == "episode"
         return SubtitleSearchRequest(
             video_path=resolved_path,
-            title=title,
-            year=year,
-            media_type="episode" if is_episode else "movie",
-            season=task.season,
-            episode=task.episode,
+            title=identity.title,
+            year=identity.year,
+            media_type=identity.media_type,
+            season=identity.season,
+            episode=identity.episode,
             preferred=self.settings.subtitles.preferred,
             fallback_languages=list(self.settings.subtitles.fallback),
-            imdb_id=_provider_id(provider_ids, "imdb"),
-            tmdb_id=_provider_id(provider_ids, "tmdb"),
+            imdb_id=identity.imdb_id,
+            tmdb_id=identity.tmdb_id,
             original_title=_normalized_search_title(
-                original_title,
+                identity.original_title,
                 is_episode=is_episode,
             ),
-            series_id=(
-                getattr(media_item, "series_id", None)
-                or getattr(series_item, "jellyfin_item_id", None)
-            ),
-            alternate_years=tuple(dict.fromkeys(alternate_years)),
+            series_id=identity.series_id,
+            alternate_years=identity.alternate_years,
         )
+
+    def _ensure_nfo_media_identity(
+        self,
+        task: Any,
+        resolved_path: Path,
+        *,
+        refresh: bool = False,
+    ) -> MediaIdentity:
+        raw_payload = dict(
+            getattr(getattr(task, "job", None), "raw_payload_json", None) or {}
+        )
+        identity = None if refresh else MediaIdentity.from_payload(raw_payload.get("media_identity"))
+        if identity is None:
+            try:
+                identity = resolve_nfo_identity(resolved_path)
+            except NfoIdentityError as error:
+                remaining = self._nfo_wait_remaining(task, NFO_READY_WAIT_SECONDS)
+                if remaining > 0 and error.code in {
+                    "nfo_not_found",
+                    "nfo_series_not_found",
+                    "nfo_malformed",
+                    "nfo_unreadable",
+                    "nfo_wrong_type",
+                    "nfo_identity_incomplete",
+                }:
+                    raise NfoIdentityPending(
+                        f"等待 MoviePilot 写入有效 NFO：{resolved_path.name}",
+                        retry_after_seconds=min(2.0, remaining),
+                        details={
+                            "video_path": str(resolved_path),
+                            "last_error": error.code,
+                            "remaining_seconds": round(remaining, 1),
+                        },
+                    ) from error
+                raise
+
+            movie_nfo_present = any(
+                path.name.casefold() == "movie.nfo" for path in identity.nfo_paths
+            )
+            movie_wait_remaining = self._nfo_wait_remaining(
+                task,
+                MOVIE_NFO_PREFERRED_WAIT_SECONDS,
+            )
+            if (
+                identity.media_type == "movie"
+                and not movie_nfo_present
+                and movie_wait_remaining > 0
+            ):
+                raise NfoIdentityPending(
+                    f"等待 MoviePilot 完成权威 movie.nfo：{resolved_path.name}",
+                    retry_after_seconds=min(2.0, movie_wait_remaining),
+                    details={
+                        "video_path": str(resolved_path),
+                        "fallback_nfo_paths": [str(path) for path in identity.nfo_paths],
+                        "remaining_seconds": round(movie_wait_remaining, 1),
+                    },
+                )
+            raw_payload["media_identity"] = identity.to_payload()
+            if getattr(task, "job", None) is not None:
+                task.job.raw_payload_json = raw_payload
+
+        task.title = identity.title
+        task.year = identity.year
+        task.season = identity.season
+        task.episode = identity.episode
+
+        has_event = getattr(self.repository, "has_task_event", None)
+        if not callable(has_event) or not has_event(task.id, "metadata"):
+            coordinate = (
+                f"，S{identity.season:02d}E{identity.episode:02d}"
+                if identity.media_type == "episode"
+                and identity.season is not None
+                and identity.episode is not None
+                else ""
+            )
+            self._record_task_event(
+                task.id,
+                "metadata",
+                "completed",
+                message=f"NFO 元数据：{identity.title}{coordinate}，年份 {identity.year}",
+                details={
+                    "source": "nfo",
+                    "media_type": identity.media_type,
+                    "title": identity.title,
+                    "original_title": identity.original_title,
+                    "year": identity.year,
+                    "season": identity.season,
+                    "episode": identity.episode,
+                    "provider_ids": {
+                        key: value
+                        for key, value in (
+                            ("imdb", identity.imdb_id),
+                            ("tmdb", identity.tmdb_id),
+                            ("tvdb", identity.tvdb_id),
+                        )
+                        if value
+                    },
+                    "nfo_paths": [str(path) for path in identity.nfo_paths],
+                    "season_episode_source": (
+                        "episode_nfo" if len(identity.nfo_paths) > 1 else "filename"
+                    )
+                    if identity.media_type == "episode"
+                    else None,
+                },
+            )
+        return identity
+
+    def _nfo_wait_remaining(self, task: Any, limit_seconds: float) -> float:
+        source = str(getattr(getattr(task, "job", None), "source", "") or "")
+        if source != "moviepilot-csf":
+            return 0.0
+        created_at = getattr(getattr(task, "job", None), "created_at", None)
+        if not isinstance(created_at, datetime):
+            return 0.0
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds()
+        return max(0.0, limit_seconds - max(0.0, elapsed))
+
+    def _has_task_event(self, task_id: int, stage: str) -> bool:
+        has_event = getattr(self.repository, "has_task_event", None)
+        return bool(callable(has_event) and has_event(task_id, stage))
 
     def _video_duration_seconds(self, video_path: Path) -> float | None:
         path = Path(video_path)
@@ -1189,55 +1315,6 @@ class SubtitleOrchestrator:
         value = float(duration) if isinstance(duration, (int, float)) and duration > 0 else None
         self._video_duration_cache[path] = value
         return value
-
-    def _enrich_task_identity_from_path(self, task: Any, resolved_path: Path) -> None:
-        episode_identity = _episode_identity_from_path(resolved_path)
-        changed: dict[str, Any] = {}
-        if episode_identity is not None:
-            season, episode, series_title, year = episode_identity
-            if task.season is None:
-                task.season = season
-                changed["season"] = season
-            if task.episode is None:
-                task.episode = episode
-                changed["episode"] = episode
-            if not str(task.title or "").strip():
-                task.title = series_title
-                changed["title"] = series_title
-            if task.year is None and year is not None:
-                task.year = year
-                changed["year"] = year
-        else:
-            movie_identity = _movie_identity_from_path(resolved_path)
-            if movie_identity is None:
-                return
-            movie_title, year = movie_identity
-            if not str(task.title or "").strip():
-                task.title = movie_title
-                changed["title"] = movie_title
-            if task.year is None:
-                task.year = year
-                changed["year"] = year
-        if not changed:
-            return
-        identity = f"S{task.season:02d}E{task.episode:02d}，" if episode_identity else ""
-        self._record_task_event(
-            task.id,
-            "metadata",
-            "completed",
-            message=(
-                f"路径元数据：{task.title or '标题未知'}，"
-                f"{identity}年份 {task.year or '未知'}"
-            ),
-            details={"source": "path", **changed},
-        )
-
-    def _jellyfin_series_for_media_item(self, media_item: Any | None) -> Any | None:
-        series_id = getattr(media_item, "series_id", None)
-        lookup = getattr(self.repository, "get_jellyfin_media_item", None)
-        if not series_id or not callable(lookup):
-            return None
-        return lookup(series_id)
 
     def _jellyfin_media_item_for_task(self, task: Any) -> Any | None:
         lookup = getattr(self.repository, "get_jellyfin_media_item", None)
@@ -1775,18 +1852,6 @@ def _format_provider_search_context(context: dict[str, Any]) -> str:
     return f"；检索依据：{'，'.join(parts)}" if parts else ""
 
 
-def _provider_id(provider_ids: Any, name: str) -> str | None:
-    if not isinstance(provider_ids, dict):
-        return None
-    normalized_name = name.casefold()
-    for key, value in provider_ids.items():
-        if str(key).casefold() != normalized_name:
-            continue
-        candidate = str(value or "").strip()
-        return candidate or None
-    return None
-
-
 def _positive_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -1818,21 +1883,6 @@ def _supplemental_subtitle_path(video_path: Path, language: str, extension: str,
         index += 1
 
 
-def _english_title_from_path(path: Path) -> str | None:
-    """Extract an English release title from a mixed-language media folder."""
-    for value in (path.parent.name, path.stem):
-        if not re.search(r"[\u4e00-\u9fff]", value):
-            continue
-        matches = re.findall(r"[A-Za-z][A-Za-z0-9 .,'&:!\-]*", value)
-        for match in matches:
-            title = re.sub(r"\s*\(?(?:19|20)\d{2}\)?\s*$", "", match)
-            title = re.split(r"\s+-\s+(?:2160|1080|720|480)p\b", title, maxsplit=1)[0]
-            title = title.strip(" .-_")
-            if len(title) >= 3 and not re.fullmatch(r"(?:mkv|mp4|avi|web[- ]?dl)", title, re.I):
-                return title
-    return None
-
-
 def _normalized_search_title(value: str | None, *, is_episode: bool) -> str | None:
     if not value:
         return None
@@ -1845,63 +1895,3 @@ def _normalized_search_title(value: str | None, *, is_episode: bool) -> str | No
             flags=re.IGNORECASE,
         ).strip(" .-_")
     return normalized or None
-
-
-def _movie_identity_from_path(path: Path) -> tuple[str, int] | None:
-    """Read a conservative movie title/year pair from common media naming."""
-    wrapped_pattern = re.compile(
-        r"(?<!\d)(?:\((?P<paren_year>(?:18|19|20)\d{2})\)|"
-        r"\[(?P<bracket_year>(?:18|19|20)\d{2})\])(?!\d)"
-    )
-    bare_pattern = re.compile(r"(?<!\d)(?:18|19|20)\d{2}(?!\d|[pi])", re.IGNORECASE)
-    latest_year = datetime.now(timezone.utc).year + 1
-    for value in (path.parent.name, path.stem):
-        wrapped = wrapped_pattern.search(value)
-        matches = [wrapped] if wrapped is not None else [
-            match
-            for match in bare_pattern.finditer(value)
-            if int(match.group(0)) <= latest_year
-        ]
-        for match in reversed(matches):
-            if match is None:
-                continue
-            title = _clean_release_title(value[: match.start()])
-            if not title:
-                continue
-            year = int(
-                match.groupdict().get("paren_year")
-                or match.groupdict().get("bracket_year")
-                or match.group(0)
-            )
-            return title, year
-    return None
-
-
-def _clean_release_title(value: str) -> str:
-    normalized = re.sub(r"[._]+", " ", value)
-    return re.sub(r"\s+", " ", normalized).strip(" .-_")
-
-
-def _episode_identity_from_path(path: Path) -> tuple[int, int, str, int | None] | None:
-    match = re.search(
-        r"(?i)(?:\bS(?P<season>\d{1,2})[ ._-]*E(?P<episode>\d{1,3})\b|"
-        r"\b(?P<season_x>\d{1,2})x(?P<episode_x>\d{1,3})\b)",
-        path.stem,
-    )
-    if match is None:
-        return None
-    season = int(match.group("season") or match.group("season_x"))
-    episode = int(match.group("episode") or match.group("episode_x"))
-    season_directory = path.parent
-    series_directory = (
-        season_directory.parent
-        if re.fullmatch(r"(?i)(?:season|第)\s*\d+\s*(?:季)?", season_directory.name)
-        else None
-    )
-    series_source = series_directory.name if series_directory is not None else path.stem[: match.start()]
-    year_match = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", series_source)
-    year = int(year_match.group(1)) if year_match is not None else None
-    title = re.sub(r"\s*\((?:19|20)\d{2}\)\s*$", "", series_source).strip(" .-_")
-    if not title:
-        title = path.stem[: match.start()].strip(" .-_")
-    return season, episode, title, year

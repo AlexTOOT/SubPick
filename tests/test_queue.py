@@ -2,6 +2,7 @@ import asyncio
 
 from subtitle_sidecar.db.repository import JobCreate, Repository
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
+from subtitle_sidecar.media.nfo import NfoIdentityPending
 from subtitle_sidecar.queue import TaskQueue
 
 
@@ -172,6 +173,43 @@ def test_task_queue_preflights_local_checks_before_provider_queue(tmp_path):
 
     assert preflighted == [local_task_id, provider_task_id]
     assert processed == [provider_task_id]
+
+
+def test_task_queue_retries_preflight_while_moviepilot_nfo_is_pending(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    task_id = _create_task(engine, "/media/pending-nfo.mkv")
+    preflighted: list[int] = []
+    processed: list[int] = []
+    sleeps: list[float] = []
+
+    def preflight(current_task_id: int) -> bool:
+        preflighted.append(current_task_id)
+        if len(preflighted) == 1:
+            raise NfoIdentityPending("NFO is still being written", retry_after_seconds=0.5)
+        return True
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=processed.append,
+            preflight_processor=preflight,
+            interval_seconds=0,
+            sleep=fake_sleep,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert preflighted == [task_id, task_id]
+    assert processed == [task_id]
+    assert sleeps == [0.5]
 
 
 def test_task_queue_recovers_queued_tasks_and_marks_stale_running_interrupted(tmp_path):

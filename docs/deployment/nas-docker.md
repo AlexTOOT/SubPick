@@ -5,7 +5,8 @@
 ```text
 MoviePilot ──通知──> SubPick ──读写──> 媒体目录
                         │
-                        ├──读取──> Jellyfin API
+                        ├──身份──> 本地 NFO
+                        ├──展示/刷新──> Jellyfin API
                         └──验证码──> MoviePilot OCR
 ```
 
@@ -99,6 +100,11 @@ http://subpick:19035
 
 MoviePilot 到拾幕是单向调用。保存 Token 后显示“等待验证”，只有拾幕成功收到
 一次鉴权回调后才会显示“已连接”。
+
+回调只需要提供媒体路径。拾幕不会用回调字段或 Jellyfin 元数据决定作品身份，而会在
+路径可访问后读取 MoviePilot 已生成的 NFO。由于回调可能早于 NFO 最终落盘，任务会在
+队列中等待最多 120 秒；电影优先等待 `movie.nfo`，剧集以 `tvshow.nfo` 为作品身份，
+再从有效分集 NFO 或文件名 `SxxExx` 取得季集号。
 
 ## 媒体路径
 

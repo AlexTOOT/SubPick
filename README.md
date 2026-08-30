@@ -14,7 +14,8 @@
 
 拾幕是面向 MoviePilot + Jellyfin 用户的轻量中文字幕服务，可作为
 ChineseSubFinder 的替代方案。它接收 MoviePilot 入库通知，也可以浏览 Jellyfin
-媒体库并手动创建字幕任务。
+媒体库并手动创建字幕任务。影片身份统一读取 MoviePilot 生成的本地 NFO；Jellyfin
+只负责媒体库浏览、海报、目录选择、字幕状态和下载后的刷新。
 
 - 支持内嵌、外挂字幕检查及字幕对轴
 - 支持电影、整剧、整季和单集批量操作
@@ -86,9 +87,13 @@ ASSRT 会读取候选详情和下载统计以提高排序质量。由于官方 A
 - API Key：与“拾幕 → 设置 → MoviePilot API Token”保持一致
 
 推荐让 MoviePilot 和拾幕把同一个 NAS 媒体根目录映射为 `/media`。Jellyfin 的容器
-路径无需完全相同，拾幕通过 Jellyfin 获取媒体信息，并通过自己的 `/media` 访问文件。
+路径无需完全相同；拾幕通过自己的 `/media` 读取媒体文件和 NFO，通过 Jellyfin 展示
+媒体库并取得手动任务所选文件的目录。
 如果 MoviePilot 下发的路径无法访问，运行概览会提示问题，可在“设置 → 系统与更新 →
 目录映射”中测试并保存转换规则。
+
+MoviePilot 回调可能早于 NFO 落盘。拾幕会等待 NFO 完成后再搜索字幕；电影优先使用
+`movie.nfo`，剧集使用 `tvshow.nfo`，并结合有效分集 NFO 或文件名中的 `SxxExx`。
 
 ## Zimuku 与 OCR
 

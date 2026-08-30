@@ -9,6 +9,7 @@ from sqlalchemy import Engine
 
 from subtitle_sidecar.db.repository import Repository
 from subtitle_sidecar.db.session import session_scope
+from subtitle_sidecar.media.nfo import NfoIdentityPending
 from subtitle_sidecar.pipeline.status import TASK_FAILED, TASK_QUEUED
 
 
@@ -173,6 +174,12 @@ class TaskQueue:
             self._active_preflight_task_id = task_id
             try:
                 needs_network = await asyncio.to_thread(self.preflight_processor, task_id)
+            except NfoIdentityPending as pending:
+                await self.sleep(pending.retry_after_seconds)
+                if self._stopping:
+                    self._queued_task_ids.discard(task_id)
+                else:
+                    self._preflight_queue.put_nowait(task_id)
             except Exception as exc:
                 self._record_processor_failure(task_id, exc)
                 self._queued_task_ids.discard(task_id)

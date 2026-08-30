@@ -210,7 +210,21 @@ def test_recent_jellyfin_media_is_sorted_by_jellyfin_date_across_libraries(
     assert items[1]["item_type"] == "Series"
 
 
-def test_moviepilot_callback_enriches_task_from_single_jellyfin_item(tmp_path: Path):
+def test_moviepilot_callback_uses_nfo_identity_and_keeps_jellyfin_id_only_for_display(
+    tmp_path: Path,
+):
+    media = tmp_path / "新·驯龙高手 (2026).mkv"
+    media.write_bytes(b"video")
+    (tmp_path / "movie.nfo").write_text(
+        "<movie>"
+        "<title>NFO 新·驯龙高手</title>"
+        "<originaltitle>How to Train Your Dragon</originaltitle>"
+        "<year>2026</year>"
+        "<imdbid>tt26743210</imdbid>"
+        "<tmdbid>1087192</tmdbid>"
+        "</movie>",
+        encoding="utf-8",
+    )
     fake_client = FakeJellyfinClient()
     fake_client.items_by_id["movie-2025"] = {
         "id": "movie-2025",
@@ -232,7 +246,7 @@ def test_moviepilot_callback_enriches_task_from_single_jellyfin_item(tmp_path: P
         response = client.post(
             "/api/v1/add-job",
             json={
-                "physical_video_file_full_path": "/media/Movie/新·驯龙高手 (2025).mkv",
+                "physical_video_file_full_path": str(media),
                 "media_server_inside_video_id": "movie-2025",
             },
         )
@@ -240,12 +254,11 @@ def test_moviepilot_callback_enriches_task_from_single_jellyfin_item(tmp_path: P
     assert response.status_code == 200
     with session_scope(app.state.engine) as session:
         task = Repository(session).list_video_tasks(limit=1)[0]
-        assert task.title == "新·驯龙高手"
-        assert task.year == 2025
-        assert task.job.raw_payload_json["jellyfin_metadata"]["provider_ids"] == {
-            "Imdb": "tt26743210",
-            "Tmdb": "1087192",
-        }
+        assert task.title == "NFO 新·驯龙高手"
+        assert task.year == 2026
+        assert task.media_server_id == "movie-2025"
+        assert task.job.raw_payload_json["media_identity"]["source"] == "nfo"
+        assert "jellyfin_metadata" not in task.job.raw_payload_json
         assert any(event.stage == "metadata" for event in task.events)
 
 
@@ -398,9 +411,10 @@ def test_jellyfin_batch_add_creates_jobs_from_cached_media_items(tmp_path: Path)
     assert task is not None
     assert task.video_path_original == str(media)
     assert task.media_server_id == "episode-1"
-    assert task.title == "剧集"
-    assert task.season == 1
-    assert task.episode == 2
+    assert task.title is None
+    assert task.year is None
+    assert task.season is None
+    assert task.episode is None
 
 
 def test_jellyfin_batch_add_deduplicates_item_ids_within_one_request(tmp_path: Path):

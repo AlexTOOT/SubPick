@@ -6,10 +6,7 @@ import re
 
 import pytest
 
-from subtitle_sidecar.pipeline.orchestrator import (
-    _episode_identity_from_path,
-    _movie_identity_from_path,
-)
+from subtitle_sidecar.media.nfo import resolve_nfo_identity
 from subtitle_sidecar.pipeline.scoring import candidate_mismatch_reason
 from subtitle_sidecar.pipeline.validator import validate_subtitle_file
 from subtitle_sidecar.providers.base import SubtitleCandidate
@@ -80,17 +77,54 @@ def test_dataset_has_movies_episodes_difficulty_and_opaque_dialogue_references()
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
-def test_dataset_path_identity(case: dict[str, object]) -> None:
-    path = Path(str(case["path"]))
+def test_dataset_nfo_identity(case: dict[str, object], tmp_path: Path) -> None:
+    path = tmp_path / str(case["path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"video")
+    premiered = ""
+    if case["alternate_years"]:
+        premiered = f"<premiered>{case['alternate_years'][0]}-01-01</premiered>"
     if case["media_type"] == "movie":
-        assert _movie_identity_from_path(path) == (case["path_title"], case["year"])
-        return
-    identity = _episode_identity_from_path(path)
-    assert identity == (
-        case["season"],
-        case["episode"],
-        case["path_title"],
-        case["year"],
+        (path.parent / "movie.nfo").write_text(
+            "<movie>"
+            f"<title>{case['title']}</title>"
+            f"<originaltitle>{case['original_title']}</originaltitle>"
+            f"<year>{case['year']}</year>"
+            f"{premiered}"
+            f"<imdbid>{case['imdb_id']}</imdbid>"
+            "</movie>",
+            encoding="utf-8",
+        )
+    else:
+        series_dir = path.parent.parent
+        (series_dir / "tvshow.nfo").write_text(
+            "<tvshow>"
+            f"<title>{case['title']}</title>"
+            f"<originaltitle>{case['original_title']}</originaltitle>"
+            f"<year>{case['year']}</year>"
+            f"<imdbid>{case['imdb_id']}</imdbid>"
+            "</tvshow>",
+            encoding="utf-8",
+        )
+        path.with_suffix(".nfo").write_text(
+            "<episodedetails>"
+            f"<title>Episode {case['episode']}</title>"
+            f"<season>{case['season']}</season>"
+            f"<episode>{case['episode']}</episode>"
+            "</episodedetails>",
+            encoding="utf-8",
+        )
+
+    identity = resolve_nfo_identity(path)
+
+    assert identity.media_type == case["media_type"]
+    assert identity.title == case["title"]
+    assert identity.original_title == case["original_title"]
+    assert identity.year == case["year"]
+    assert identity.alternate_years == tuple(case["alternate_years"])
+    assert identity.imdb_id == case["imdb_id"]
+    assert (identity.season, identity.episode) == (
+        (case.get("season"), case.get("episode"))
     )
 
 

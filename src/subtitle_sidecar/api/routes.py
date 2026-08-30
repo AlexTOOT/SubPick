@@ -449,11 +449,10 @@ def create_api_router() -> APIRouter:
                     source="moviepilot-csf",
                     raw_payload=payload.model_dump(exclude_none=True),
                     video_path_original=payload.physical_video_file_full_path,
-                    media_server_id=payload.media_server_inside_video_id,
+                    media_server_id=payload.media_server_inside_video_id or None,
                 )
             )
             task_id = job.video_tasks[0].id
-        _enrich_moviepilot_task(request, task_id, payload.media_server_inside_video_id)
         _enqueue_task(request, task_id)
         return AddJobResponse(job_id=job.id, status=job.status)
 
@@ -1449,10 +1448,6 @@ def create_api_router() -> APIRouter:
                         },
                         video_path_original=item.path,
                         media_server_id=item.jellyfin_item_id,
-                        title=item.series_name or item.name,
-                        year=item.year,
-                        season=item.season,
-                        episode=item.episode,
                     )
                     for item in valid_items
                 ]
@@ -1780,94 +1775,6 @@ def _load_jellyfin_config(request: Request, repo: Repository) -> dict[str, str]:
         "server_url": str(stored.get("server_url") or defaults.get("server_url") or ""),
         "api_key": str(stored.get("api_key") or defaults.get("api_key") or ""),
         "user_id": str(stored.get("user_id") or defaults.get("user_id") or ""),
-    }
-
-
-def _enrich_moviepilot_task(
-    request: Request,
-    task_id: int,
-    jellyfin_item_id: str | None,
-) -> None:
-    metadata: dict | None = None
-    lookup_error: str | None = None
-    with session_scope(request.app.state.engine) as session:
-        repo = Repository(session)
-        config = _load_jellyfin_config(request, repo)
-        task = repo.get_video_task(task_id)
-        cached = repo.get_jellyfin_media_item(jellyfin_item_id)
-        if cached is None and task is not None:
-            cached = repo.get_jellyfin_media_item_by_path(task.video_path_original)
-        if cached is not None:
-            metadata = _jellyfin_metadata_from_cached_item(cached)
-
-    if jellyfin_item_id and config["server_url"] and config["api_key"]:
-        try:
-            metadata = _jellyfin_client(request, config).get_item(jellyfin_item_id)
-        except Exception as error:
-            lookup_error = type(error).__name__
-
-    with session_scope(request.app.state.engine) as session:
-        repo = Repository(session)
-        task = repo.get_video_task(task_id)
-        if task is None:
-            return
-        if metadata is not None:
-            task.title = str(metadata.get("series_name") or metadata.get("name") or "") or task.title
-            task.year = metadata.get("year") if isinstance(metadata.get("year"), int) else task.year
-            task.season = (
-                metadata.get("season") if isinstance(metadata.get("season"), int) else task.season
-            )
-            task.episode = (
-                metadata.get("episode") if isinstance(metadata.get("episode"), int) else task.episode
-            )
-            raw_payload = dict(task.job.raw_payload_json or {})
-            raw_payload["jellyfin_metadata"] = {
-                "name": metadata.get("name"),
-                "series_name": metadata.get("series_name"),
-                "original_title": metadata.get("original_title"),
-                "year": metadata.get("year"),
-                "season": metadata.get("season"),
-                "episode": metadata.get("episode"),
-                "provider_ids": metadata.get("provider_ids") or {},
-            }
-            task.job.raw_payload_json = raw_payload
-            repo.record_task_event(
-                task.id,
-                "metadata",
-                "completed",
-                message=(
-                    f"Jellyfin 元数据：{task.title or '标题未知'}"
-                    f"，年份 {task.year or '未知'}"
-                    f"，来源 {'实时查询' if lookup_error is None and jellyfin_item_id else '媒体库缓存'}"
-                ),
-                details={
-                    "source": "jellyfin",
-                    "jellyfin_item_id": jellyfin_item_id,
-                    "year": task.year,
-                    "season": task.season,
-                    "episode": task.episode,
-                    "lookup_error": lookup_error,
-                },
-            )
-        elif lookup_error is not None:
-            repo.record_task_event(
-                task.id,
-                "metadata",
-                "warning",
-                message=f"Jellyfin 元数据查询失败：{lookup_error}，将使用任务路径继续",
-                details={"source": "jellyfin", "lookup_error": lookup_error},
-            )
-
-
-def _jellyfin_metadata_from_cached_item(item) -> dict:
-    return {
-        "name": item.name,
-        "series_name": item.series_name,
-        "original_title": item.original_title,
-        "year": item.year,
-        "season": item.season,
-        "episode": item.episode,
-        "provider_ids": item.provider_ids_json or {},
     }
 
 
