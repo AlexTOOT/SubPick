@@ -38,6 +38,7 @@ SUPPORTED_FORMATS = {"srt", "ass", "ssa", "vtt"}
 MAX_ARCHIVE_MEMBERS = 300
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_CAPTURED_CAPTCHAS = 100
+MAX_SEARCH_TIMEOUTS = 2
 CAPTCHA_IMAGE_RE = re.compile(
     r"data:image/(?:bmp|png|jpeg);base64,([A-Za-z0-9+/=\s]+)", re.IGNORECASE
 )
@@ -382,9 +383,32 @@ class ZimukuProvider:
         last_query: _SearchQuery | None = None
         try:
             candidates: list[SubtitleCandidate] = []
+            completed_query_count = 0
+            timeout_count = 0
+            last_timeout: Exception | None = None
             for query in _search_queries(request):
                 last_query = query
-                candidates = self._search_one(request, query)
+                try:
+                    candidates = self._search_one(request, query)
+                except Exception as error:
+                    if not _is_provider_timeout(error):
+                        raise
+                    timeout_count += 1
+                    last_timeout = error
+                    if timeout_count >= MAX_SEARCH_TIMEOUTS:
+                        raise
+                    self._emit(
+                        ProviderSearchReport(
+                            provider=self.name,
+                            status="progress",
+                            candidate_count=0,
+                            error="provider_timeout",
+                            reason=query.value,
+                            search_context=_search_context(request, query),
+                        )
+                    )
+                    continue
+                completed_query_count += 1
                 self._emit(
                     ProviderSearchReport(
                         provider=self.name,
@@ -396,6 +420,8 @@ class ZimukuProvider:
                 )
                 if candidates:
                     break
+            if completed_query_count == 0 and last_timeout is not None:
+                raise last_timeout
         except Exception as error:
             self._emit(
                 ProviderSearchReport(
@@ -1379,6 +1405,12 @@ def _safe_error(error: Exception) -> str:
     if isinstance(error, httpx.RequestError):
         return "provider_request_failed"
     return error.__class__.__name__
+
+
+def _is_provider_timeout(error: Exception) -> bool:
+    return isinstance(error, httpx.TimeoutException) or (
+        isinstance(error, ZimukuError) and str(error) == "provider_timeout"
+    )
 
 
 def _duration_ms(started_at: float) -> int:

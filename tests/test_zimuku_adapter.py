@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -124,6 +125,20 @@ class FullPageClient(SearchClient):
         return FakeResponse(text=f"<table><tbody>{rows}</tbody></table>", url=str(url))
 
 
+class TimeoutThenSearchClient(SearchClient):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if len(self.calls) == 1:
+            raise httpx.ReadTimeout("temporary search timeout")
+        return FakeResponse(text=self.html, url=str(url))
+
+
+class AlwaysTimeoutClient(SearchClient):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        raise httpx.ReadTimeout("search timeout")
+
+
 def movie_request() -> SubtitleSearchRequest:
     return SubtitleSearchRequest(
         video_path=Path("How.to.Train.Your.Dragon.2025.mkv"),
@@ -182,6 +197,37 @@ def test_movie_search_falls_back_to_plain_localized_and_original_titles() -> Non
         ("新·驯龙高手", "title"),
         ("How to Train Your Dragon", "title"),
     ]
+
+
+def test_search_continues_with_next_strategy_after_one_timeout() -> None:
+    client = TimeoutThenSearchClient()
+    reports = []
+    provider = ZimukuProvider(client=client, request_delay_seconds=0)
+    provider.set_reporter(reports.append)
+
+    candidates = provider.search(movie_request())
+
+    assert len(candidates) == 1
+    timeout_report = next(
+        report for report in reports if report.status == "progress" and report.error
+    )
+    assert timeout_report.error == "provider_timeout"
+    assert timeout_report.reason == "新·驯龙高手 2025"
+    assert reports[-1].status == "completed"
+
+
+def test_search_stops_after_two_timeouts_and_reports_failure() -> None:
+    client = AlwaysTimeoutClient()
+    reports = []
+    provider = ZimukuProvider(client=client, request_delay_seconds=0)
+    provider.set_reporter(reports.append)
+
+    with pytest.raises(httpx.ReadTimeout):
+        provider.search(episode_request())
+
+    assert len(client.calls) == 2
+    assert [report.status for report in reports] == ["started", "progress", "failed"]
+    assert reports[-1].error == "provider_timeout"
 
 
 def test_movie_work_page_accepts_adjacent_release_year_when_title_matches() -> None:

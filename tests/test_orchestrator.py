@@ -1351,6 +1351,34 @@ def test_provider_search_progress_releases_database_writer_before_next_request(
     assert repository.task_events[-1]["stage"] == "provider_search"
 
 
+def test_provider_search_timeout_progress_describes_limited_fallback(tmp_path: Path) -> None:
+    video = tmp_path / "Movie.2025.mkv"
+    video.write_bytes(b"video")
+    task = build_task(video)
+    repository = FakeRepository(task)
+    orchestrator = SubtitleOrchestrator(
+        settings=build_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([], []),
+    )
+
+    orchestrator._record_provider_search_report(
+        task.id,
+        ProviderSearchReport(
+            provider="zimuku",
+            status="progress",
+            candidate_count=0,
+            error="provider_timeout",
+            reason="Movie 2025",
+        ),
+    )
+
+    assert repository.task_events[-1]["message"] == (
+        "字幕来源 zimuku：检索键 Movie 2025 超时，继续有限回退"
+    )
+
+
 def test_successful_candidate_validates_places_and_records_artifact(tmp_path: Path) -> None:
     video = tmp_path / "Movie.Name.2024.mkv"
     video.write_bytes(b"video")

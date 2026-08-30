@@ -1530,6 +1530,8 @@ class SubtitleOrchestrator:
                     f"字幕来源 {provider_name}：检索键 {report.reason} 命中 12 小时空结果缓存，"
                     "跳过本次网络请求"
                 )
+            elif report.error == "provider_timeout":
+                message = f"字幕来源 {provider_name}：检索键 {report.reason} 超时，继续有限回退"
             elif report.error:
                 message = f"字幕来源 {provider_name}：检索键 {report.reason} 未识别影片，继续回退"
             else:
