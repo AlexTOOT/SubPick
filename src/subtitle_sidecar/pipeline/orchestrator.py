@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 import math
 from pathlib import Path
 import re
@@ -47,7 +48,11 @@ from subtitle_sidecar.pipeline.status import (
 )
 from subtitle_sidecar.pipeline.validator import validate_subtitle_file
 from subtitle_sidecar.probe.streams import probe_video_duration_seconds, probe_video_streams
-from subtitle_sidecar.providers.base import DownloadedSubtitle, SubtitleCandidate, SubtitleSearchRequest
+from subtitle_sidecar.providers.base import (
+    DownloadedSubtitle,
+    SubtitleCandidate,
+    SubtitleSearchRequest,
+)
 from subtitle_sidecar.sync.ffsubsync import sync_subtitle
 
 
@@ -93,6 +98,13 @@ def _temporary_target(destination: Path) -> Path:
     return destination.with_name(f"{destination.name}.{temp_name}.tmp")
 
 
+def _sync_diagnostic_excerpt(value: Any, limit: int = 1200) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"…{normalized[-limit:]}"
+
+
 class SubtitleOrchestrator:
     def __init__(
         self,
@@ -112,7 +124,10 @@ class SubtitleOrchestrator:
         self.provider_registry = provider_registry
         self.embedded_subtitle_detector = embedded_subtitle_detector or probe_video_streams
         self.video_duration_prober = video_duration_prober or probe_video_duration_seconds
-        self.subtitle_syncer = subtitle_syncer or sync_subtitle
+        self.subtitle_syncer = subtitle_syncer or partial(
+            sync_subtitle,
+            ffprobe_path=settings.probe.ffprobe_path,
+        )
         self.bundle_cache = bundle_cache or EpisodeBundleCache(Path(settings.cache_dir))
         self.jellyfin_client_factory = jellyfin_client_factory
         self._retry_content_identities: dict[int, dict[str, int]] = {}
@@ -296,9 +311,7 @@ class SubtitleOrchestrator:
                 return
 
             self._set_task_stage(task_id, TASK_CHECKING_EXISTING)
-            existing, _external_details = self._inspect_external_subtitles(
-                task_id, resolved_path
-            )
+            existing, _external_details = self._inspect_external_subtitles(task_id, resolved_path)
             existing_matches = tuple(existing.matches)
             if existing.has_chinese and not supplemental_search:
                 self.repository.update_video_task_status(
@@ -376,9 +389,7 @@ class SubtitleOrchestrator:
             )
             set_reporter = getattr(self.provider_registry, "set_reporter", None)
             if callable(set_reporter):
-                set_reporter(
-                    lambda report: self._record_provider_search_report(task_id, report)
-                )
+                set_reporter(lambda report: self._record_provider_search_report(task_id, report))
             search_batches = getattr(self.provider_registry, "search_batches", None)
             if callable(search_batches):
                 batches = iter(
@@ -583,7 +594,9 @@ class SubtitleOrchestrator:
             try:
                 self._set_task_stage(task_id, TASK_DOWNLOADING)
                 is_bundle_reuse = bool(selected_candidate.raw_metadata.get("bundle_reused"))
-                download_stage = "bundle_materialization" if is_bundle_reuse else "candidate_download"
+                download_stage = (
+                    "bundle_materialization" if is_bundle_reuse else "candidate_download"
+                )
                 download_message = "开始取用缓存" if is_bundle_reuse else "开始下载"
                 self._record_task_event(
                     task_id,
@@ -598,7 +611,9 @@ class SubtitleOrchestrator:
                     task_id,
                     download_stage,
                     "completed",
-                    message=self._candidate_message("缓存已准备" if is_bundle_reuse else "下载完成", event_details),
+                    message=self._candidate_message(
+                        "缓存已准备" if is_bundle_reuse else "下载完成", event_details
+                    ),
                     details=event_details,
                 )
             except Exception as exc:
@@ -790,7 +805,18 @@ class SubtitleOrchestrator:
                     subtitle_to_place = sync_result.output_path
                     is_synced = True
                     sync_score = getattr(sync_result, "score", None)
-                    sync_details = {**event_details, "sync_score": sync_score}
+                    sync_details = {
+                        **event_details,
+                        "sync_score": sync_score,
+                        "sync_reference_stream": getattr(
+                            sync_result,
+                            "reference_stream",
+                            None,
+                        ),
+                        "sync_attempted_reference_streams": list(
+                            getattr(sync_result, "attempted_reference_streams", ())
+                        ),
+                    }
                     sync_summary = (
                         f"对轴完成，语音活动匹配分 {sync_score:.1f}（不代表影片身份匹配）"
                         if isinstance(sync_score, (int, float))
@@ -809,12 +835,26 @@ class SubtitleOrchestrator:
                         **event_details,
                         "sync_reason": last_failure_reason,
                         "sync_score": getattr(sync_result, "score", None),
+                        "sync_returncode": getattr(sync_result, "returncode", None),
+                        "sync_reference_stream": getattr(
+                            sync_result,
+                            "reference_stream",
+                            None,
+                        ),
+                        "sync_attempted_reference_streams": list(
+                            getattr(sync_result, "attempted_reference_streams", ())
+                        ),
+                        "sync_stderr": _sync_diagnostic_excerpt(getattr(sync_result, "stderr", "")),
                     }
                     sync_message = (
                         f"对轴拒绝：音频匹配质量过低（score {sync_details['sync_score']:.1f}）"
                         if last_failure_reason == "low_quality_alignment"
                         and isinstance(sync_details["sync_score"], (int, float))
-                        else last_failure_reason
+                        else (
+                            "对轴失败：所选音轨未检测到可用语音"
+                            if last_failure_reason == "speech_not_detected"
+                            else last_failure_reason
+                        )
                     )
                     self._record_task_event(
                         task_id,
@@ -859,11 +899,20 @@ class SubtitleOrchestrator:
                             details={**event_details, "cached_episode_count": cached_count},
                         )
                 if supplemental_search and any(
-                    _same_subtitle_content(subtitle_to_place, match.path) for match in existing_matches
+                    _same_subtitle_content(subtitle_to_place, match.path)
+                    for match in existing_matches
                 ):
                     last_failure_reason = "duplicate_existing_subtitle"
-                    self._record_task_event(task_id, "candidate_placement", "skipped", message=last_failure_reason, details=event_details)
-                    self._update_candidate_attempt(recorded_candidate.id, status="skipped", error_message=last_failure_reason)
+                    self._record_task_event(
+                        task_id,
+                        "candidate_placement",
+                        "skipped",
+                        message=last_failure_reason,
+                        details=event_details,
+                    )
+                    self._update_candidate_attempt(
+                        recorded_candidate.id, status="skipped", error_message=last_failure_reason
+                    )
                     continue
                 self._set_task_stage(task_id, TASK_PLACING)
                 self._record_task_event(
@@ -1189,10 +1238,10 @@ class SubtitleOrchestrator:
         *,
         refresh: bool = False,
     ) -> MediaIdentity:
-        raw_payload = dict(
-            getattr(getattr(task, "job", None), "raw_payload_json", None) or {}
+        raw_payload = dict(getattr(getattr(task, "job", None), "raw_payload_json", None) or {})
+        identity = (
+            None if refresh else MediaIdentity.from_payload(raw_payload.get("media_identity"))
         )
-        identity = None if refresh else MediaIdentity.from_payload(raw_payload.get("media_identity"))
         if identity is None:
             try:
                 identity = resolve_nfo_identity(resolved_path)
@@ -1343,7 +1392,9 @@ class SubtitleOrchestrator:
 
     def _refresh_jellyfin_subtitle_state(self, task: Any) -> None:
         media_item = self._jellyfin_media_item_for_task(task)
-        item_id = getattr(task, "media_server_id", None) or getattr(media_item, "jellyfin_item_id", None)
+        item_id = getattr(task, "media_server_id", None) or getattr(
+            media_item, "jellyfin_item_id", None
+        )
         item_path = (
             getattr(media_item, "path", None)
             or getattr(task, "video_path_resolved", None)
@@ -1478,9 +1529,7 @@ class SubtitleOrchestrator:
             task_id,
             "provider_wait",
             "waiting",
-            message=(
-                f"Provider {provider} 冷却，约 {rounded_wait_seconds} 秒后获得搜索槽位"
-            ),
+            message=(f"Provider {provider} 冷却，约 {rounded_wait_seconds} 秒后获得搜索槽位"),
             details={
                 "provider": provider,
                 "wait_seconds": rounded_wait_seconds,
@@ -1494,12 +1543,8 @@ class SubtitleOrchestrator:
         provider_success_count = sum(
             1 for report in terminal_reports if report.status == "completed"
         )
-        provider_failure_count = sum(
-            1 for report in terminal_reports if report.status == "failed"
-        )
-        provider_skipped_count = sum(
-            1 for report in terminal_reports if report.status == "skipped"
-        )
+        provider_failure_count = sum(1 for report in terminal_reports if report.status == "failed")
+        provider_skipped_count = sum(1 for report in terminal_reports if report.status == "skipped")
         details = {
             "candidate_count": candidate_count,
             "provider_success_count": provider_success_count,
@@ -1869,7 +1914,9 @@ def _same_subtitle_content(first: Path, second: Path) -> bool:
         return False
 
 
-def _supplemental_subtitle_path(video_path: Path, language: str, extension: str, supplemental: bool) -> Path:
+def _supplemental_subtitle_path(
+    video_path: Path, language: str, extension: str, supplemental: bool
+) -> Path:
     if not supplemental:
         return build_subtitle_path(video_path, language=language, extension=extension, default=True)
 
