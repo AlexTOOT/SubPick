@@ -1,7 +1,9 @@
 import asyncio
 
+from subtitle_sidecar.config import AppSettings
 from subtitle_sidecar.db.repository import JobCreate, Repository
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
+from subtitle_sidecar.main import _build_bundle_cache_probe
 from subtitle_sidecar.media.nfo import NfoIdentityPending
 from subtitle_sidecar.queue import TaskQueue
 
@@ -139,6 +141,38 @@ def test_task_queue_prioritizes_cached_subtitle_tasks_without_waiting(tmp_path):
 
     assert processed == [cached_task_id, network_task_id]
     assert sleeps == []
+
+
+def test_manual_retry_is_treated_as_high_priority_queue_work(tmp_path, monkeypatch):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        regular = repo.create_job(
+            JobCreate(
+                source="jellyfin-manual",
+                raw_payload={"physical_video_file_full_path": "/media/regular.mkv"},
+                video_path_original="/media/regular.mkv",
+            )
+        ).video_tasks[0]
+        retry = repo.create_job(
+            JobCreate(
+                source="manual-retry",
+                raw_payload={"physical_video_file_full_path": "/media/retry.mkv"},
+                video_path_original="/media/retry.mkv",
+            )
+        ).video_tasks[0]
+        regular_id = regular.id
+        retry_id = retry.id
+
+    monkeypatch.setattr(
+        "subtitle_sidecar.pipeline.orchestrator.SubtitleOrchestrator.has_cached_bundle",
+        lambda _self, _task_id: False,
+    )
+    priority_probe = _build_bundle_cache_probe(AppSettings(data_dir=tmp_path), engine)
+
+    assert priority_probe(regular_id) is False
+    assert priority_probe(retry_id) is True
 
 
 def test_task_queue_preflights_local_checks_before_provider_queue(tmp_path):
