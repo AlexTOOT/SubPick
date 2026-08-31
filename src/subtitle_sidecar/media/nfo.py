@@ -10,9 +10,7 @@ from subtitle_sidecar.media.identity import MediaIdentity
 
 
 MAX_NFO_BYTES = 4 * 1024 * 1024
-_EPISODE_PATTERN = re.compile(
-    r"(?i)(?<![A-Z0-9])S(?P<season>\d{1,3})E(?P<episode>\d{1,4})(?!\d)"
-)
+_EPISODE_PATTERN = re.compile(r"(?i)(?<![A-Z0-9])S(?P<season>\d{1,3})E(?P<episode>\d{1,4})(?!\d)")
 _YEAR_PATTERN = re.compile(r"(?<!\d)(?P<year>(?:18|19|20)\d{2})(?!\d)")
 _IMDB_PATTERN = re.compile(r"tt\d{7,10}", re.IGNORECASE)
 _NUMERIC_ID_PATTERN = re.compile(r"\d+")
@@ -151,7 +149,11 @@ def _episode_identity(
             nfo_coordinate = (season, episode)
         episode_title = _text(episode_document.root, "title")
 
-    if nfo_coordinate is not None and path_coordinate is not None and nfo_coordinate != path_coordinate:
+    if (
+        nfo_coordinate is not None
+        and path_coordinate is not None
+        and nfo_coordinate != path_coordinate
+    ):
         raise NfoIdentityError(
             "nfo_episode_path_conflict",
             f"分集 NFO 与文件名季集号冲突：{video_path}",
@@ -174,7 +176,19 @@ def _episode_identity(
             details=details,
         )
 
+    season_document = _find_season_document(video_path, coordinate[0])
+    episode_fields = _identity_fields(episode_document) if episode_document is not None else None
+    season_fields = _identity_fields(season_document) if season_document is not None else None
+    alternate_years = set(_years_from_fields(series))
+    if season_fields is not None:
+        alternate_years.update(_years_from_fields(season_fields))
+    if episode_fields is not None:
+        alternate_years.update(_years_from_fields(episode_fields))
+    alternate_years.discard(int(series["year"]))
+
     nfo_paths = [series_document.path]
+    if season_document is not None:
+        nfo_paths.append(season_document.path)
     if episode_document is not None:
         nfo_paths.append(episode_document.path)
     return MediaIdentity(
@@ -188,7 +202,7 @@ def _episode_identity(
         tmdb_id=_as_optional_string(series["tmdb_id"]),
         tvdb_id=_as_optional_string(series["tvdb_id"]),
         episode_title=episode_title,
-        alternate_years=tuple(series["alternate_years"]),
+        alternate_years=tuple(sorted(alternate_years)),
         nfo_paths=tuple(nfo_paths),
     )
 
@@ -237,6 +251,30 @@ def _find_episode_document(
         f"分集 NFO 根节点无效：{candidate}",
         details={"nfo_path": str(candidate), "root": document.root_name},
     )
+
+
+def _find_season_document(video_path: Path, expected_season: int) -> _NfoDocument | None:
+    """Return a trusted, same-directory season.nfo when it matches the episode season.
+
+    Season metadata supplements the authoritative tvshow identity.  Because it is
+    optional, malformed or wrongly typed season files are ignored instead of making
+    an otherwise valid episode identity unavailable.
+    """
+
+    directory = video_path if video_path.is_dir() else video_path.parent
+    candidate = _find_named_file(directory, "season.nfo")
+    if candidate is None:
+        return None
+    try:
+        document = _parse_document(candidate)
+    except NfoIdentityError:
+        return None
+    if document.root_name != "season":
+        return None
+    season_number = _parse_nonnegative_int(_text(document.root, "seasonnumber", "season"))
+    if season_number is not None and season_number != expected_season:
+        return None
+    return document
 
 
 def _find_movie_documents(video_path: Path) -> list[_NfoDocument]:
@@ -342,21 +380,16 @@ def _identity_fields(document: _NfoDocument) -> dict[str, object]:
             _text(root, "premiered"),
             _text(root, "releasedate"),
             _text(root, "firstaired"),
+            _text(root, "aired"),
         )
         if (parsed := _parse_year(value)) is not None
     }
     if year is None and date_years:
         year = min(date_years)
     unique_ids = _unique_ids(root)
-    imdb_id = _valid_provider_id(
-        "imdb", unique_ids.get("imdb") or _text(root, "imdbid", "imdb_id")
-    )
-    tmdb_id = _valid_provider_id(
-        "tmdb", unique_ids.get("tmdb") or _text(root, "tmdbid", "tmdb_id")
-    )
-    tvdb_id = _valid_provider_id(
-        "tvdb", unique_ids.get("tvdb") or _text(root, "tvdbid", "tvdb_id")
-    )
+    imdb_id = _valid_provider_id("imdb", unique_ids.get("imdb") or _text(root, "imdbid", "imdb_id"))
+    tmdb_id = _valid_provider_id("tmdb", unique_ids.get("tmdb") or _text(root, "tmdbid", "tmdb_id"))
+    tvdb_id = _valid_provider_id("tvdb", unique_ids.get("tvdb") or _text(root, "tvdbid", "tvdb_id"))
     return {
         "title": title,
         "original_title": original_title,
@@ -366,6 +399,14 @@ def _identity_fields(document: _NfoDocument) -> dict[str, object]:
         "tmdb_id": tmdb_id,
         "tvdb_id": tvdb_id,
     }
+
+
+def _years_from_fields(fields: dict[str, object]) -> set[int]:
+    years = {value for value in fields.get("alternate_years", ()) if isinstance(value, int)}
+    year = fields.get("year")
+    if isinstance(year, int):
+        years.add(year)
+    return years
 
 
 def _require_title_year(fields: dict[str, object], path: Path) -> None:

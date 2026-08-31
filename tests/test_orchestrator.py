@@ -40,11 +40,18 @@ class FakeRepository:
         self.placed_candidates_by_task: dict[int, list[SimpleNamespace]] = {}
         self.retry_parent_by_task: dict[int, int] = {}
         self.retry_parent_calls: list[int] = []
+        self.episode_duplicate_task_id: int | None = None
+        self.episode_duplicate_calls: list[dict[str, Any]] = []
+        self.related_tasks: dict[int, SimpleNamespace] = {}
 
     def get_video_task(self, task_id: int) -> SimpleNamespace | None:
-        if task_id != self.task.id:
-            return None
-        return self.task
+        if task_id == self.task.id:
+            return self.task
+        return self.related_tasks.get(task_id)
+
+    def find_completed_episode_content_duplicate(self, **kwargs: Any) -> int | None:
+        self.episode_duplicate_calls.append(kwargs)
+        return self.episode_duplicate_task_id
 
     def list_placed_candidates_for_task(self, task_id: int) -> list[SimpleNamespace]:
         return list(self.placed_candidates_by_task.get(task_id, []))
@@ -2248,6 +2255,62 @@ def test_manual_retry_different_identity_still_uses_content_duplicate_fallback(
         "failed",
         "duplicate_existing_subtitle",
     )
+
+
+def test_episode_skips_content_already_placed_for_different_episode(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "Show.S01E02.mkv"
+    video.write_bytes(b"video")
+    tvshow = tmp_path / "tvshow.nfo"
+    tvshow.write_text(
+        "<tvshow><title>Show</title><year>2024</year>"
+        '<uniqueid type="tmdb" default="true">123</uniqueid></tvshow>',
+        encoding="utf-8",
+    )
+    video.with_suffix(".nfo").write_text(
+        "<episodedetails><title>Episode 2</title><season>1</season>"
+        "<episode>2</episode></episodedetails>",
+        encoding="utf-8",
+    )
+    task = build_task(video)
+    task.season = 1
+    task.episode = 2
+    repository = FakeRepository(task)
+    repository.episode_duplicate_task_id = 77
+    repository.related_tasks[77] = SimpleNamespace(season=1, episode=1)
+    candidate = build_candidate()
+    provider = FakeProvider()
+    orchestrator = SubtitleOrchestrator(
+        settings=_retry_settings(tmp_path),
+        repository=repository,
+        resolver=FakeResolver(video),
+        provider_registry=FakeProviderRegistry([provider], [candidate]),
+    )
+
+    orchestrator.process_video_task(task.id)
+
+    assert repository.status_updates[-1] == (
+        task.id,
+        "failed",
+        "episode_content_duplicate",
+    )
+    assert len(repository.episode_duplicate_calls) == 1
+    duplicate_call = repository.episode_duplicate_calls[0]
+    assert duplicate_call["series_id"] == "tmdb:123"
+    assert (duplicate_call["season"], duplicate_call["episode"]) == (1, 2)
+    event = next(
+        item
+        for item in repository.task_events
+        if item["error_code"] == "episode_content_duplicate"
+    )
+    assert event["details"]["matched_task_id"] == 77
+    assert event["details"]["series_id"] == "tmdb:123"
+    assert (event["details"]["season"], event["details"]["episode"]) == (1, 2)
+    assert (
+        event["details"]["matched_season"],
+        event["details"]["matched_episode"],
+    ) == (1, 1)
 
 
 def test_placement_failure_marks_candidate_attempt_failed(tmp_path: Path, monkeypatch) -> None:

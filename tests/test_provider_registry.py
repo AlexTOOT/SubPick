@@ -72,6 +72,22 @@ class FakeSubtitle:
         title: str = "Movie bilingual",
         download_content: bytes = b"1\n00:00:01,000 --> 00:00:02,000\nhello\n",
         metadata: dict | None = None,
+        provider_name: str | None = None,
+        subtitle_id: str | None = None,
+        movie_kind: str | None = None,
+        movie_title: str | None = None,
+        movie_full_name: str | None = None,
+        movie_year: int | None = None,
+        movie_imdb_id: str | None = None,
+        movie_tmdb_id: str | None = None,
+        series_title: str | None = None,
+        series_season: int | None = None,
+        series_episode: int | None = None,
+        series_imdb_id: str | None = None,
+        series_tmdb_id: str | None = None,
+        file_id: int | None = None,
+        file_name: str | None = None,
+        release: str | None = None,
     ) -> None:
         self.language = language
         self.page_link = page_link
@@ -80,6 +96,22 @@ class FakeSubtitle:
         self.content: bytes | None = None
         self.download_content = download_content
         self.metadata = metadata or {}
+        self.provider_name = provider_name
+        self.id = subtitle_id
+        self.movie_kind = movie_kind
+        self.movie_title = movie_title
+        self.movie_full_name = movie_full_name
+        self.movie_year = movie_year
+        self.movie_imdb_id = movie_imdb_id
+        self.movie_tmdb_id = movie_tmdb_id
+        self.series_title = series_title
+        self.series_season = series_season
+        self.series_episode = series_episode
+        self.series_imdb_id = series_imdb_id
+        self.series_tmdb_id = series_tmdb_id
+        self.file_id = file_id
+        self.file_name = file_name
+        self.release = release
 
 
 class FakeVideo:
@@ -679,6 +711,192 @@ def test_opensubtitlescom_prefers_original_title_and_applies_imdb_id() -> None:
 
     assert client.video.title == "Original Movie Title"
     assert client.video.imdb_id == "tt1234567"
+
+
+def test_opensubtitlescom_episode_candidate_cannot_cross_season_or_episode() -> None:
+    client = FakeSubliminalClient()
+    client._results = [
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="aot-s01e01",
+            movie_kind="episode",
+            series_title="Shingeki no Kyojin",
+            series_season=1,
+            series_episode=1,
+            series_imdb_id="tt2560140",
+            file_name="Attack.on.Titan.S01E01.srt",
+        )
+    ]
+    provider = SubliminalProvider(
+        client=client,
+        language_factory=lambda language: language,
+        providers=["opensubtitlescom"],
+    )
+
+    matching = provider.search(
+        SubtitleSearchRequest(
+            video_path=Path("/media/Attack.on.Titan.S01E01.mkv"),
+            title="进击的巨人",
+            original_title="Attack on Titan",
+            imdb_id="tt2560140",
+            year=2013,
+            media_type="episode",
+            season=1,
+            episode=1,
+            preferred="bilingual",
+            fallback_languages=["zh-cn"],
+        )
+    )
+    wrong_season = provider.search(
+        SubtitleSearchRequest(
+            video_path=Path("/media/Attack.on.Titan.S02E01.mkv"),
+            title="进击的巨人",
+            original_title="Attack on Titan",
+            imdb_id="tt2560140",
+            year=2013,
+            media_type="episode",
+            season=2,
+            episode=1,
+            preferred="bilingual",
+            fallback_languages=["zh-cn"],
+        )
+    )
+    wrong_episode = provider.search(
+        SubtitleSearchRequest(
+            video_path=Path("/media/Attack.on.Titan.S01E02.mkv"),
+            title="进击的巨人",
+            original_title="Attack on Titan",
+            imdb_id="tt2560140",
+            year=2013,
+            media_type="episode",
+            season=1,
+            episode=2,
+            preferred="bilingual",
+            fallback_languages=["zh-cn"],
+        )
+    )
+
+    assert len(matching) == 1
+    assert wrong_season == []
+    assert wrong_episode == []
+
+
+def test_opensubtitlescom_rejects_ted_movie_and_conflicting_series_identity() -> None:
+    client = FakeSubliminalClient()
+    client._results = [
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="ted-movie",
+            movie_kind="movie",
+            movie_title="Ted",
+            movie_year=2012,
+            file_name="Ted.2012.srt",
+        ),
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="wrong-series-title",
+            movie_kind="episode",
+            series_title="Ted Lasso",
+            series_season=1,
+            series_episode=4,
+        ),
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="wrong-series-id",
+            movie_kind="episode",
+            series_title="Ted",
+            series_season=1,
+            series_episode=4,
+            series_imdb_id="tt10986410",
+        ),
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="coordinate-only",
+            movie_kind="episode",
+            series_season=1,
+            series_episode=4,
+        ),
+    ]
+    provider = SubliminalProvider(
+        client=client,
+        language_factory=lambda language: language,
+        providers=["opensubtitlescom"],
+    )
+    request = SubtitleSearchRequest(
+        video_path=Path("/media/Ted.S01E04.mkv"),
+        title="泰迪熊",
+        original_title="Ted",
+        imdb_id="tt14824792",
+        year=2024,
+        media_type="episode",
+        season=1,
+        episode=4,
+        preferred="bilingual",
+        fallback_languages=["zh-cn"],
+    )
+
+    assert provider.search(request) == []
+
+
+def test_opensubtitlescom_accepts_verified_episode_and_preserves_safe_metadata() -> None:
+    client = FakeSubliminalClient()
+    client._results = [
+        FakeSubtitle(
+            provider_name="opensubtitlescom",
+            subtitle_id="98765",
+            movie_kind="episode",
+            movie_title="Just Say Yes",
+            movie_full_name="Ted - S01E04 - Just Say Yes",
+            movie_year=2024,
+            series_title="Ted",
+            series_season=1,
+            series_episode=4,
+            series_imdb_id="tt14824792",
+            series_tmdb_id="201834",
+            file_id=456789,
+            file_name="Ted.S01E04.WEB-DL.srt",
+            release="Ted.S01E04.1080p.WEB-DL",
+        )
+    ]
+    provider = SubliminalProvider(
+        client=client,
+        language_factory=lambda language: language,
+        providers=["opensubtitlescom"],
+    )
+    request = SubtitleSearchRequest(
+        video_path=Path("/media/Ted.S01E04.mkv"),
+        title="泰迪熊",
+        original_title="Ted",
+        imdb_id="tt14824792",
+        tmdb_id="201834",
+        series_id="tmdb:201834",
+        year=2024,
+        media_type="episode",
+        season=1,
+        episode=4,
+        preferred="bilingual",
+        fallback_languages=["zh-cn"],
+    )
+
+    candidates = provider.search(request)
+
+    assert len(candidates) == 1
+    assert candidates[0].raw_metadata["opensubtitlescom_id"] == "98765"
+    assert candidates[0].raw_metadata["metadata"] == {
+        "subtitle_id": "98765",
+        "movie_kind": "episode",
+        "movie_title": "Just Say Yes",
+        "movie_full_name": "Ted - S01E04 - Just Say Yes",
+        "movie_year": 2024,
+        "series_title": "Ted",
+        "series_season": 1,
+        "series_episode": 4,
+        "series_imdb_id": "tt14824792",
+        "series_tmdb_id": "201834",
+        "file_id": 456789,
+        "file_name": "Ted.S01E04.WEB-DL.srt",
+        "release": "Ted.S01E04.1080p.WEB-DL",
+    }
 
 
 def test_opensubtitlescom_restores_simplified_chinese_support() -> None:

@@ -21,9 +21,12 @@ from subtitle_sidecar.db.models import (
 )
 from subtitle_sidecar.pipeline.status import (
     ACTIVE_TASK_STATUSES,
+    PENDING_TASK_STATUSES,
     TASK_COMPLETED,
     TASK_FAILED,
     TASK_INTERRUPTED,
+    TASK_QUEUED,
+    TASK_RETRY_WAIT,
     TASK_SKIPPED_EMBEDDED_SUBTITLE,
     TASK_SKIPPED_EXISTING_SUBTITLE,
     TERMINAL_TASK_STATUSES,
@@ -194,7 +197,25 @@ class Repository:
         )
         return list(self.session.scalars(statement).unique())
 
+    def list_retry_candidates_for_task(
+        self,
+        task_id: int,
+    ) -> list[SubtitleCandidateRecord]:
+        """Return every candidate actually attempted, including failed downloads."""
+        statement = (
+            select(SubtitleCandidateRecord)
+            .where(
+                SubtitleCandidateRecord.video_task_id == task_id,
+                SubtitleCandidateRecord.attempt_count > 0,
+            )
+            .order_by(SubtitleCandidateRecord.id.asc())
+        )
+        return list(self.session.scalars(statement))
+
     def get_retry_parent_task_id(self, task_id: int) -> int | None:
+        task = self.session.get(VideoTask, task_id)
+        if task is not None and task.retry_parent_task_id:
+            return task.retry_parent_task_id
         raw_payload = self.session.scalar(
             select(Job.raw_payload_json)
             .join(VideoTask, VideoTask.job_id == Job.id)
@@ -210,6 +231,188 @@ class Repository:
         except (TypeError, ValueError):
             return None
         return parent_task_id if parent_task_id > 0 else None
+
+    def find_in_flight_task_for_path(
+        self,
+        path: str,
+        *,
+        alternate_path: str | None = None,
+        exclude_task_id: int | None = None,
+    ) -> VideoTask | None:
+        statuses = set(ACTIVE_TASK_STATUSES) | set(PENDING_TASK_STATUSES)
+        paths = {path}
+        if alternate_path:
+            paths.add(alternate_path)
+        statement = (
+            select(VideoTask)
+            .options(selectinload(VideoTask.job))
+            .where(
+                or_(
+                    VideoTask.video_path_original.in_(paths),
+                    VideoTask.video_path_resolved.in_(paths),
+                ),
+                VideoTask.status.in_(statuses),
+            )
+            .order_by(VideoTask.id.desc())
+            .limit(1)
+        )
+        if exclude_task_id is not None:
+            statement = statement.where(VideoTask.id != exclude_task_id)
+        return self.session.scalar(statement)
+
+    def create_retry_child(
+        self,
+        parent_task: VideoTask,
+        *,
+        source: str,
+        status: str,
+        retry_at: datetime | None,
+        auto_retry_count: int,
+        retry_category: str | None,
+    ) -> VideoTask:
+        raw_payload = dict(parent_task.job.raw_payload_json or {})
+        raw_payload["retry_of_task_id"] = parent_task.id
+        if source == "auto-retry":
+            raw_payload["auto_retry_count"] = auto_retry_count
+        else:
+            raw_payload.pop("auto_retry_count", None)
+        if retry_category:
+            raw_payload["retry_category"] = retry_category
+        else:
+            raw_payload.pop("retry_category", None)
+        job = Job(
+            source=source,
+            raw_payload_json=_json_safe(raw_payload),
+            status="queued",
+        )
+        child = VideoTask(
+            video_path_original=parent_task.video_path_original,
+            media_server_id=parent_task.media_server_id,
+            title=parent_task.title,
+            year=parent_task.year,
+            season=parent_task.season,
+            episode=parent_task.episode,
+            status=status,
+            retry_at=retry_at,
+            auto_retry_count=auto_retry_count,
+            retry_category=retry_category,
+            retry_parent_task_id=parent_task.id,
+        )
+        job.video_tasks.append(child)
+        self.session.add(job)
+        self.session.flush()
+        self._refresh_job_status(job.id)
+        return child
+
+    def list_due_retry_task_ids(self, now: datetime) -> list[int]:
+        comparable_now = _database_datetime(now)
+        statement = (
+            select(VideoTask.id)
+            .where(
+                VideoTask.status == TASK_RETRY_WAIT,
+                VideoTask.retry_at.is_not(None),
+                VideoTask.retry_at <= comparable_now,
+            )
+            .order_by(VideoTask.retry_at.asc(), VideoTask.id.asc())
+        )
+        return list(self.session.scalars(statement))
+
+    def list_retry_wait_task_ids(self) -> list[int]:
+        return self.list_video_task_ids_by_status([TASK_RETRY_WAIT])
+
+    def activate_retry_task(self, task_id: int) -> VideoTask | None:
+        task = self.session.get(VideoTask, task_id)
+        if task is None or task.status != TASK_RETRY_WAIT:
+            return None
+        return self.update_video_task_status(task_id, TASK_QUEUED)
+
+    def cancel_pending_auto_retries_for_path(
+        self,
+        path: str,
+        *,
+        alternate_path: str | None = None,
+        completed_task_id: int,
+    ) -> list[int]:
+        paths = {path}
+        if alternate_path:
+            paths.add(alternate_path)
+        statement = (
+            select(VideoTask)
+            .join(Job, Job.id == VideoTask.job_id)
+            .where(
+                Job.source == "auto-retry",
+                VideoTask.id != completed_task_id,
+                VideoTask.status.in_(PENDING_TASK_STATUSES),
+                or_(
+                    VideoTask.video_path_original.in_(paths),
+                    VideoTask.video_path_resolved.in_(paths),
+                ),
+            )
+            .order_by(VideoTask.id.asc())
+        )
+        canceled_ids: list[int] = []
+        for task in self.session.scalars(statement):
+            task.status = TASK_SKIPPED_EXISTING_SUBTITLE
+            task.retry_at = None
+            task.error_message = None
+            canceled_ids.append(task.id)
+            self._refresh_job_status(task.job_id)
+        return canceled_ids
+
+    def next_retry_at(self) -> datetime | None:
+        return self.session.scalar(
+            select(func.min(VideoTask.retry_at)).where(
+                VideoTask.status == TASK_RETRY_WAIT,
+                VideoTask.retry_at.is_not(None),
+            )
+        )
+
+    def find_completed_episode_content_duplicate(
+        self,
+        *,
+        series_id: str,
+        season: int,
+        episode: int,
+        content_identity: dict[str, str],
+        exclude_task_id: int | None = None,
+    ) -> int | None:
+        identities = {
+            key: value
+            for key in ("content_sha256", "text_fingerprint")
+            if isinstance((value := content_identity.get(key)), str) and value
+        }
+        if not series_id or not identities:
+            return None
+        statement = (
+            select(SubtitleCandidateRecord, VideoTask, Job)
+            .join(
+                SubtitleArtifact,
+                SubtitleArtifact.candidate_id == SubtitleCandidateRecord.id,
+            )
+            .join(VideoTask, VideoTask.id == SubtitleCandidateRecord.video_task_id)
+            .join(Job, Job.id == VideoTask.job_id)
+            .where(
+                VideoTask.status == TASK_COMPLETED,
+                SubtitleArtifact.kind == "placed",
+                or_(VideoTask.season != season, VideoTask.episode != episode),
+            )
+            .order_by(VideoTask.id.desc())
+        )
+        if exclude_task_id is not None:
+            statement = statement.where(VideoTask.id != exclude_task_id)
+        for candidate, task, job in self.session.execute(statement):
+            payload = job.raw_payload_json if isinstance(job.raw_payload_json, dict) else {}
+            media_identity = payload.get("media_identity")
+            if not isinstance(media_identity, dict) or media_identity.get("series_id") != series_id:
+                continue
+            metadata = (
+                candidate.raw_metadata_json
+                if isinstance(candidate.raw_metadata_json, dict)
+                else {}
+            )
+            if any(metadata.get(key) == value for key, value in identities.items()):
+                return task.id
+        return None
 
     def get_jellyfin_media_item(self, jellyfin_item_id: str | None) -> JellyfinMediaItem | None:
         if not jellyfin_item_id:
@@ -870,3 +1073,9 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     return str(value)
+
+
+def _database_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)

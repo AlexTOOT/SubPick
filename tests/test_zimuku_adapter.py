@@ -54,6 +54,20 @@ SEASON_HTML = """
 </div></div>
 """
 
+TED_SEARCH_HTML = """
+<div class="item prel clearfix"><div class="title">
+  <p class="tt clearfix"><a href="/subs/68007.html">泰迪熊 Ted 第一季 (2024)</a></p>
+</div></div>
+"""
+
+TED_SEASON_PAGE_HTML = """
+<table><tbody><tr><td class="first">
+  <img alt="简体中文字幕 English字幕 双语字幕" src="/flag/china.gif">
+  <a href="/detail/227094.html" title="Ted.S01.2024.1080p.WEB-DL">season pack</a>
+  <span class="label label-info">SRT</span>
+</td><td><i title="字幕质量:9.5分"></i></td><td>2048</td></tr></tbody></table>
+"""
+
 MULTI_CANDIDATE_HTML = """
 <table><tbody>
   <tr><td class="first"><a href="/detail/219503.html" title="怪奇收割.Strange.Harvest.2025.中英字幕">bilingual</a><span class="label">ASS/SSA</span></td>
@@ -123,6 +137,19 @@ class FullPageClient(SearchClient):
             )
         )
         return FakeResponse(text=f"<table><tbody>{rows}</tbody></table>", url=str(url))
+
+
+class BareTitleSeasonClient(SearchClient):
+    def __init__(self) -> None:
+        super().__init__(html="")
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if str(url).endswith("/subs/68007.html"):
+            return FakeResponse(text=TED_SEASON_PAGE_HTML, url=str(url))
+        query = str((kwargs.get("params") or {}).get("q") or "")
+        html = TED_SEARCH_HTML if query == "泰迪熊" else "<html></html>"
+        return FakeResponse(text=html, url=str(url))
 
 
 class TimeoutThenSearchClient(SearchClient):
@@ -362,7 +389,59 @@ def test_episode_search_tries_localized_season_names_before_codes() -> None:
         ("Ted Season 2 Episode 4", "episode_localized"),
         ("泰迪熊 S02E04", "episode_fallback"),
         ("Ted S02E04", "episode_fallback"),
+        ("泰迪熊", "title"),
+        ("Ted", "title"),
     ]
+
+
+def test_episode_search_falls_back_to_bare_title_after_specific_queries() -> None:
+    request = replace(
+        episode_request(),
+        title="泰迪熊",
+        original_title="Ted",
+        year=2024,
+        season=1,
+        episode=4,
+    )
+    client = BareTitleSeasonClient()
+
+    candidates = ZimukuProvider(client=client, request_delay_seconds=0).search(request)
+
+    assert [candidate.source_url for candidate in candidates] == [
+        "https://zimuku.org/detail/227094.html"
+    ]
+    search_queries = [call[1]["params"]["q"] for call in client.calls if "params" in call[1]]
+    assert search_queries[-1] == "泰迪熊"
+    assert all(query != "泰迪熊" for query in search_queries[:-1])
+
+
+def test_episode_work_page_accepts_trusted_season_year_as_alternate() -> None:
+    request = replace(
+        episode_request(),
+        title="泰迪熊",
+        original_title="Ted",
+        year=2024,
+        alternate_years=(2026,),
+        season=2,
+        episode=3,
+    )
+    html = TED_SEARCH_HTML.replace("第一季 (2024)", "第二季 (2026)")
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("泰迪熊", "泰迪熊", "title", "title"),
+    )
+
+    assert pages == [("泰迪熊 Ted 第二季 (2026)", "/subs/68007.html")]
+    assert (
+        _matching_work_pages(
+            html,
+            request=replace(request, alternate_years=()),
+            query=_SearchQuery("泰迪熊", "泰迪熊", "title", "title"),
+        )
+        == []
+    )
 
 
 def test_episode_work_rejects_distant_same_substring_series() -> None:
@@ -485,16 +564,18 @@ def test_moviepilot_ocr_solver_uses_base64_contract() -> None:
 def test_moviepilot_ocr_invalid_answer_is_recorded_before_fallback(tmp_path: Path) -> None:
     recorder = FailedCaptchaRecorder(tmp_path)
     chain = CaptchaSolverChain(
-        [MoviePilotOcrSolver(base_url="http://ocr", client=OcrClient("not-a-number")), FixedSolver()],
+        [
+            MoviePilotOcrSolver(base_url="http://ocr", client=OcrClient("not-a-number")),
+            FixedSolver(),
+        ],
         recorder=recorder,
     )
 
     assert chain.solve(b"BM123") == "26584"
     metadata = list(tmp_path.glob("*.json"))
     assert len(metadata) == 1
-    assert (
-        '"answer": "raw=not-a-number; preprocessed=not-a-number"'
-        in metadata[0].read_text(encoding="utf-8")
+    assert '"answer": "raw=not-a-number; preprocessed=not-a-number"' in metadata[0].read_text(
+        encoding="utf-8"
     )
     assert '"reason": "invalid_answer"' in metadata[0].read_text(encoding="utf-8")
 
@@ -555,8 +636,7 @@ def test_rejected_captcha_attempts_are_persisted_when_enabled(tmp_path: Path) ->
     assert len(list(tmp_path.glob("*.bmp"))) == 3
     assert all('"answer": "26584"' in path.read_text(encoding="utf-8") for path in metadata)
     assert all(
-        '"reason": "rejected_by_zimuku"' in path.read_text(encoding="utf-8")
-        for path in metadata
+        '"reason": "rejected_by_zimuku"' in path.read_text(encoding="utf-8") for path in metadata
     )
 
 
@@ -573,9 +653,13 @@ class DownloadClient(SearchClient):
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         if str(url).endswith("/detail/710623.html"):
-            return FakeResponse(text='<a id="down1" href="/dld/710623.html">download</a>', url=str(url))
+            return FakeResponse(
+                text='<a id="down1" href="/dld/710623.html">download</a>', url=str(url)
+            )
         if str(url).endswith("/dld/710623.html"):
-            return FakeResponse(text='<a rel="nofollow" href="/download/pack.zip">file</a>', url=str(url))
+            return FakeResponse(
+                text='<a rel="nofollow" href="/download/pack.zip">file</a>', url=str(url)
+            )
         if str(url).endswith("/download/pack.zip"):
             return FakeResponse(
                 content=self.archive,
@@ -618,7 +702,9 @@ def test_movie_archive_selects_chinese_bilingual_member_as_primary(tmp_path: Pat
         request_base_url="https://srtku.com",
     )[0]
 
-    downloaded = ZimukuProvider(client=client, request_delay_seconds=0).download(candidate, tmp_path)
+    downloaded = ZimukuProvider(client=client, request_delay_seconds=0).download(
+        candidate, tmp_path
+    )
 
     assert downloaded.path.name.endswith("Movie.ChsEng.ass")
 

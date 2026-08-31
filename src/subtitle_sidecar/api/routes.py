@@ -108,7 +108,12 @@ from subtitle_sidecar.jellyfin.client import JellyfinClient
 from subtitle_sidecar.jellyfin.subtitle_status import SubtitleStatus, detect_subtitle_status
 from subtitle_sidecar.media.subtitles import SUBTITLE_EXTENSIONS
 from subtitle_sidecar.media.resolver import MediaResolver
-from subtitle_sidecar.pipeline.status import TASK_COMPLETED
+from subtitle_sidecar.pipeline.status import (
+    TASK_COMPLETED,
+    TASK_QUEUED,
+    TASK_RETRY_WAIT,
+    TERMINAL_TASK_STATUSES,
+)
 from subtitle_sidecar.diagnostics import build_diagnostics
 from subtitle_sidecar.observability import emit_structured_log
 from subtitle_sidecar.providers.assrt_adapter import AssrtProvider
@@ -1490,8 +1495,12 @@ def create_api_router() -> APIRouter:
                         )
                     )
                     continue
-                retry_job_id, retry_task_id, retry_status = _create_retry_task(repo, original_task)
-            _enqueue_task(request, retry_task_id)
+                retry_job_id, retry_task_id, retry_status, retry_created = _create_retry_task(
+                    repo,
+                    original_task,
+                )
+            if retry_created and retry_status == TASK_QUEUED:
+                _enqueue_task(request, retry_task_id)
             results.append(
                 BatchRetryTaskResultResponse(
                     task_id=task_id,
@@ -1595,9 +1604,13 @@ def create_api_router() -> APIRouter:
             if original_task is None:
                 raise HTTPException(status_code=404, detail="Task not found")
 
-            retry_job_id, retry_task_id, retry_status = _create_retry_task(repo, original_task)
+            retry_job_id, retry_task_id, retry_status, retry_created = _create_retry_task(
+                repo,
+                original_task,
+            )
 
-        _enqueue_task(request, retry_task_id)
+        if retry_created and retry_status == TASK_QUEUED:
+            _enqueue_task(request, retry_task_id)
         return RetryTaskResponse(
             job_id=retry_job_id,
             task_id=retry_task_id,
@@ -1631,23 +1644,48 @@ def _enqueue_task(request: Request, task_id: int) -> None:
     request.app.state.enqueue_task(task_id)
 
 
-def _create_retry_task(repo: Repository, original_task: VideoTask) -> tuple[int, int, str]:
-    raw_payload = dict(original_task.job.raw_payload_json)
-    raw_payload["retry_of_task_id"] = original_task.id
-    retry_job = repo.create_job(
-        JobCreate(
-            source="manual-retry",
-            raw_payload=raw_payload,
-            video_path_original=original_task.video_path_original,
-            media_server_id=original_task.media_server_id,
-        )
+def _create_retry_task(
+    repo: Repository,
+    original_task: VideoTask,
+) -> tuple[int, int, str, bool]:
+    existing = repo.find_in_flight_task_for_path(
+        original_task.video_path_original,
+        alternate_path=original_task.video_path_resolved,
+        exclude_task_id=(
+            original_task.id
+            if original_task.status in TERMINAL_TASK_STATUSES
+            else None
+        ),
     )
-    retry_task = retry_job.video_tasks[0]
-    retry_task.title = original_task.title
-    retry_task.year = original_task.year
-    retry_task.season = original_task.season
-    retry_task.episode = original_task.episode
-    return retry_job.id, retry_task.id, retry_task.status
+    if existing is not None:
+        if existing.job.source != "auto-retry" or existing.status not in {
+            TASK_QUEUED,
+            TASK_RETRY_WAIT,
+        }:
+            return existing.job_id, existing.id, existing.status, False
+        canceled_ids = repo.cancel_pending_auto_retries_for_path(
+            original_task.video_path_original,
+            alternate_path=original_task.video_path_resolved,
+            completed_task_id=original_task.id,
+        )
+        for canceled_task_id in canceled_ids:
+            repo.record_task_event(
+                video_task_id=canceled_task_id,
+                stage="retry_wait",
+                status="skipped",
+                message=f"用户已从任务 #{original_task.id} 发起手动重试，取消延迟重试",
+                error_code="retry_superseded_by_manual_retry",
+                details={"manual_retry_of_task_id": original_task.id},
+            )
+    retry_task = repo.create_retry_child(
+        original_task,
+        source="manual-retry",
+        status=TASK_QUEUED,
+        retry_at=None,
+        auto_retry_count=0,
+        retry_category=None,
+    )
+    return retry_task.job_id, retry_task.id, retry_task.status, True
 
 
 def _delete_task(
@@ -2345,6 +2383,10 @@ def _to_task_summary(task: VideoTask) -> VideoTaskSummaryResponse:
         status=task.status,
         video_path_original=task.video_path_original,
         result_subtitle_path=task.result_subtitle_path,
+        retry_at=_as_utc(task.retry_at) if task.retry_at is not None else None,
+        auto_retry_count=task.auto_retry_count,
+        retry_category=task.retry_category,
+        retry_parent_task_id=task.retry_parent_task_id,
         created_at=_as_utc(task.created_at),
         updated_at=_as_utc(task.updated_at),
     )
@@ -2359,6 +2401,10 @@ def _to_task_detail(task: VideoTask) -> VideoTaskDetailResponse:
         video_path_original=task.video_path_original,
         video_path_resolved=task.video_path_resolved,
         result_subtitle_path=task.result_subtitle_path,
+        retry_at=_as_utc(task.retry_at) if task.retry_at is not None else None,
+        auto_retry_count=task.auto_retry_count,
+        retry_category=task.retry_category,
+        retry_parent_task_id=task.retry_parent_task_id,
         created_at=_as_utc(task.created_at),
         updated_at=_as_utc(task.updated_at),
         candidates=[_to_candidate(candidate) for candidate in task.candidates],

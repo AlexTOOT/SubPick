@@ -61,8 +61,7 @@ class ZimukuCaptchaRecognitionError(ZimukuError):
 
 
 class CaptchaSolver(Protocol):
-    def solve(self, image: bytes) -> str:
-        ...
+    def solve(self, image: bytes) -> str: ...
 
 
 class FailedCaptchaRecorder:
@@ -667,6 +666,18 @@ def _search_queries(request: SubtitleSearchRequest) -> list[_SearchQuery]:
                         strategy="episode_fallback",
                     )
                 )
+        # Some Zimuku series pages are indexed only by their bare work title.
+        # Keep this fallback last so precise season/episode queries remain preferred;
+        # matching work pages still have to pass the normal title, season, and year checks.
+        for title, source in titles:
+            queries.append(
+                _SearchQuery(
+                    value=title,
+                    title=title,
+                    title_source=source,
+                    strategy="title",
+                )
+            )
     else:
         for title, source in titles:
             if request.year:
@@ -698,10 +709,7 @@ def _season_title_query(title: str, season: int) -> str:
 
 def _episode_title_query(title: str, season: int, episode: int) -> str:
     if re.search(r"[\u3400-\u9fff]", title):
-        return (
-            f"{title} 第{_format_chinese_number(season)}季"
-            f"第{_format_chinese_number(episode)}集"
-        )
+        return f"{title} 第{_format_chinese_number(season)}季第{_format_chinese_number(episode)}集"
     return f"{title} Season {season} Episode {episode}"
 
 
@@ -885,18 +893,12 @@ def _work_matches_request(
     if request.year is not None:
         years = set(_release_years(work_title))
         expected_years = {
-            year
-            for year in (request.year, *request.alternate_years)
-            if isinstance(year, int)
+            year for year in (request.year, *request.alternate_years) if isinstance(year, int)
         }
         # Festival, theatrical, streaming, series-premiere and episode years
         # can legitimately differ by one year. Keep nearby years eligible;
         # stable distant work years are safe to reject for both media types.
-        if years and all(
-            abs(year - expected) > 1
-            for year in years
-            for expected in expected_years
-        ):
+        if years and all(abs(year - expected) > 1 for year in years for expected in expected_years):
             return False
     if episode and request.season is not None:
         detected = _season_number(work_title)
@@ -943,7 +945,19 @@ def _season_number(value: str) -> int | None:
 
 
 def _chinese_number(value: str) -> int | None:
-    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    digits = {
+        "零": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
     if value in digits:
         return digits[value]
     if "十" in value:
@@ -1059,20 +1073,16 @@ def _prepare_captcha_for_ocr(image: bytes) -> bytes:
             threshold = _otsu_threshold(grayscale.histogram())
             pixels = grayscale.load()
             edge_pixels = [pixels[x, 0] for x in range(grayscale.width)]
-            edge_pixels.extend(
-                pixels[x, grayscale.height - 1] for x in range(grayscale.width)
-            )
+            edge_pixels.extend(pixels[x, grayscale.height - 1] for x in range(grayscale.width))
             edge_pixels.extend(pixels[0, y] for y in range(grayscale.height))
-            edge_pixels.extend(
-                pixels[grayscale.width - 1, y] for y in range(grayscale.height)
-            )
+            edge_pixels.extend(pixels[grayscale.width - 1, y] for y in range(grayscale.height))
             edge_pixels.sort()
             background = edge_pixels[len(edge_pixels) // 2] if edge_pixels else 255
             dark_background = background <= threshold
             normalized = grayscale.point(
-                lambda value: 0
-                if (value > threshold if dark_background else value < threshold)
-                else 255
+                lambda value: (
+                    0 if (value > threshold if dark_background else value < threshold) else 255
+                )
             )
             normalized = normalized.resize(
                 (max(1, normalized.width * 4), max(1, normalized.height * 4)),
@@ -1141,7 +1151,8 @@ def _extract_zip(content: bytes, target_dir: Path) -> list[DownloadedSubtitleMem
             files = [
                 info
                 for info in archive.infolist()
-                if not info.is_dir() and Path(info.filename).suffix.lower().lstrip(".") in SUPPORTED_FORMATS
+                if not info.is_dir()
+                and Path(info.filename).suffix.lower().lstrip(".") in SUPPORTED_FORMATS
             ]
             if len(files) > MAX_ARCHIVE_MEMBERS:
                 raise ZimukuError("zimuku_archive_too_many_members")
@@ -1204,9 +1215,7 @@ def _extract_external_archive(
         extract_root = temporary_path / "extracted"
         extract_root.mkdir()
         if use_unar:
-            _run_archive_tool(
-                [str(unar), "-f", "-D", "-o", str(extract_root), str(archive_path)]
-            )
+            _run_archive_tool([str(unar), "-f", "-D", "-o", str(extract_root), str(archive_path)])
         else:
             try:
                 _run_archive_tool(
@@ -1217,9 +1226,7 @@ def _extract_external_archive(
                     raise
                 shutil.rmtree(extract_root)
                 extract_root.mkdir()
-                _run_archive_tool(
-                    [unar, "-f", "-D", "-o", str(extract_root), str(archive_path)]
-                )
+                _run_archive_tool([unar, "-f", "-D", "-o", str(extract_root), str(archive_path)])
         resolved_root = extract_root.resolve()
         members: list[DownloadedSubtitleMember] = []
         total = 0
@@ -1310,7 +1317,11 @@ def _parse_lsar_entries(output: str) -> list[tuple[str, int]]:
 def _safe_archive_member(value: str) -> bool:
     normalized = value.replace("\\", "/")
     path = Path(normalized)
-    return not path.is_absolute() and ".." not in path.parts and not re.match(r"^[A-Za-z]:", normalized)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and not re.match(r"^[A-Za-z]:", normalized)
+    )
 
 
 def _response_filename(response: Any, url: str) -> str:

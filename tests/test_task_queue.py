@@ -12,6 +12,22 @@ def test_task_queue_serializes_tasks_and_honors_configured_interval(tmp_path) ->
     create_tables(engine)
     processed_task_ids: list[int] = []
     sleep_calls: list[float] = []
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        first_task_id = repo.create_job(
+            JobCreate(
+                source="test",
+                raw_payload={"physical_video_file_full_path": "/media/one.mkv"},
+                video_path_original="/media/one.mkv",
+            )
+        ).video_tasks[0].id
+        second_task_id = repo.create_job(
+            JobCreate(
+                source="test",
+                raw_payload={"physical_video_file_full_path": "/media/two.mkv"},
+                video_path_original="/media/two.mkv",
+            )
+        ).video_tasks[0].id
 
     def process_task(task_id: int) -> None:
         processed_task_ids.append(task_id)
@@ -27,14 +43,14 @@ def test_task_queue_serializes_tasks_and_honors_configured_interval(tmp_path) ->
             sleep=fake_sleep,
         )
         await queue.start()
-        queue.enqueue(1)
-        queue.enqueue(2)
+        queue.enqueue(first_task_id)
+        queue.enqueue(second_task_id)
         await queue.wait_until_idle_async(timeout=1)
         await queue.stop()
 
     asyncio.run(run_queue())
 
-    assert processed_task_ids == [1, 2]
+    assert processed_task_ids == [first_task_id, second_task_id]
     assert sleep_calls == [7.5]
 
 
@@ -82,7 +98,8 @@ def test_task_queue_recovers_queued_tasks_and_interrupts_active_tasks(tmp_path) 
 
     asyncio.run(run_queue())
 
-    assert processed_task_ids == [queued_task_id]
+    assert processed_task_ids[0] == queued_task_id
+    assert len(processed_task_ids) == 2
 
     with session_scope(engine) as session:
         repo = Repository(session)
@@ -92,5 +109,6 @@ def test_task_queue_recovers_queued_tasks_and_interrupts_active_tasks(tmp_path) 
     assert active_task.status == "interrupted"
     assert active_task.error_message == "interrupted_by_restart"
     assert [(event.stage, event.status, event.error_code) for event in active_task.events] == [
-        ("queue", "interrupted", "interrupted_by_restart")
+        ("queue", "interrupted", "interrupted_by_restart"),
+        ("retry_schedule", "completed", None),
     ]

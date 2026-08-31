@@ -81,7 +81,13 @@ def subtitle_content_identity(path: Path) -> dict[str, str]:
 
 
 def _decode_subtitle(payload: bytes) -> str | None:
-    for encoding in ("utf-8-sig", "utf-8", "gb18030", "big5"):
+    encodings: list[str] = []
+    if payload.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        encodings.append("utf-32")
+    elif payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    encodings.extend(("utf-8-sig", "utf-8", "gb18030", "big5"))
+    for encoding in encodings:
         try:
             return payload.decode(encoding)
         except UnicodeDecodeError:

@@ -60,15 +60,45 @@ def _tvshow_xml() -> str:
     )
 
 
-def _episode_xml(*, season: int = 1, episode: int = 3) -> str:
+def _episode_xml(
+    *,
+    season: int = 1,
+    episode: int = 3,
+    year: int | None = 2024,
+    aired: str | None = None,
+    premiered: str | None = None,
+) -> str:
+    year_xml = f"<year>{year}</year>" if year is not None else ""
+    aired_xml = f"<aired>{aired}</aired>" if aired else ""
+    premiered_xml = f"<premiered>{premiered}</premiered>" if premiered else ""
     return (
         "<episodedetails>"
         "<title>第三集</title>"
-        "<year>2024</year>"
+        f"{year_xml}"
+        f"{aired_xml}"
+        f"{premiered_xml}"
         f"<season>{season}</season>"
         f"<episode>{episode}</episode>"
         "<tmdbid>episode-id-must-not-be-used</tmdbid>"
         "</episodedetails>"
+    )
+
+
+def _season_xml(
+    *,
+    season: int = 2,
+    year: int | None = 2026,
+    premiered: str | None = "2026-03-05",
+) -> str:
+    year_xml = f"<year>{year}</year>" if year is not None else ""
+    premiered_xml = f"<premiered>{premiered}</premiered>" if premiered else ""
+    return (
+        "<season>"
+        "<title>第 2 季</title>"
+        f"{year_xml}"
+        f"{premiered_xml}"
+        f"<seasonnumber>{season}</seasonnumber>"
+        "</season>"
     )
 
 
@@ -154,6 +184,59 @@ def test_episode_identity_merges_tvshow_and_episode_nfo(tmp_path: Path) -> None:
     assert identity.imdb_id == "tt12637874"
     assert identity.series_id == "tmdb:106379"
     assert identity.nfo_paths == (tvshow_nfo, episode_nfo)
+
+
+def test_episode_identity_keeps_series_year_and_merges_season_episode_years(
+    tmp_path: Path,
+) -> None:
+    series = tmp_path / "泰迪熊 Ted (2024)"
+    season = series / "Season 2"
+    video = _write(season / "泰迪熊 - S02E03 - 1080p.mkv", "video")
+    tvshow_nfo = _write(
+        series / "tvshow.nfo",
+        _tvshow_xml().replace("辐射", "泰迪熊").replace("Fallout", "Ted"),
+    )
+    season_nfo = _write(season / "season.nfo", _season_xml())
+    episode_nfo = _write(
+        video.with_suffix(".nfo"),
+        _episode_xml(season=2, episode=3, year=None, aired="2026-03-05"),
+    )
+
+    identity = resolve_nfo_identity(video)
+
+    assert identity.year == 2024
+    assert identity.alternate_years == (2026,)
+    assert (identity.season, identity.episode) == (2, 3)
+    assert identity.nfo_paths == (tvshow_nfo, season_nfo, episode_nfo)
+
+
+def test_episode_identity_ignores_untrusted_or_unreasonable_season_year(
+    tmp_path: Path,
+) -> None:
+    series = tmp_path / "泰迪熊 Ted (2024)"
+    season = series / "Season 2"
+    video = _write(season / "泰迪熊 - S02E03.mkv", "video")
+    _write(series / "tvshow.nfo", _tvshow_xml())
+    _write(
+        season / "season.nfo",
+        _season_xml(season=1, year=3026, premiered="3026-03-05"),
+    )
+    _write(
+        video.with_suffix(".nfo"),
+        _episode_xml(
+            season=2,
+            episode=3,
+            year=3026,
+            aired="2026-03-05",
+            premiered="2025-12-01",
+        ),
+    )
+
+    identity = resolve_nfo_identity(video)
+
+    assert identity.year == 2024
+    assert identity.alternate_years == (2025, 2026)
+    assert all(year < 2100 for year in identity.alternate_years)
 
 
 def test_episode_identity_ignores_moviepilot_movie_shaped_episode_nfo(
@@ -254,6 +337,7 @@ def test_new_moviepilot_task_waits_for_authoritative_movie_nfo(tmp_path: Path) -
         orchestrator._build_search_request(task, video)
 
     assert raised.value.code == "nfo_pending"
+    assert raised.value.retry_after_seconds == pytest.approx(30, abs=1)
     assert raised.value.details["fallback_nfo_paths"] == [str(video.with_suffix(".nfo"))]
 
 

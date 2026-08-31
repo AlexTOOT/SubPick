@@ -82,7 +82,11 @@ def validate_subtitle_file(
                 cue_count=cue_count,
                 duration_seconds=duration_seconds,
             )
-        if video_duration_seconds >= 40 * 60 and duration_seconds < video_duration_seconds * 0.5:
+        # A subtitle ending near the middle of a normal movie/episode is almost
+        # certainly for different media.  The previous 40-minute gate missed
+        # half-hour episodes (for example, a 20-minute subtitle for a
+        # 36-minute episode), while still allowing ordinary end credits.
+        if video_duration_seconds >= 20 * 60 and duration_seconds < video_duration_seconds * 0.6:
             return ValidationResult(
                 is_valid=False,
                 has_chinese=True,

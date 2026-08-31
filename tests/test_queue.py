@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from subtitle_sidecar.config import AppSettings
 from subtitle_sidecar.db.repository import JobCreate, Repository
@@ -311,12 +312,158 @@ def test_task_queue_recovers_queued_tasks_and_marks_stale_running_interrupted(tm
         running_task = repo.get_video_task(running_task_id)
         running_events = repo.list_task_events(running_task_id)
 
-    assert calls == [queued_task_id]
+    assert calls[0] == queued_task_id
+    assert len(calls) == 2
     assert queued_task is not None
     assert queued_task.status == "completed"
     assert running_task is not None
     assert running_task.status == "interrupted"
     assert running_task.error_message == "interrupted_by_restart"
     assert [(event.stage, event.status, event.error_code) for event in running_events] == [
-        ("queue", "interrupted", "interrupted_by_restart")
+        ("queue", "interrupted", "interrupted_by_restart"),
+        ("retry_schedule", "completed", None),
     ]
+
+
+def test_failed_task_persists_retry_wait_and_restart_recovers_when_due(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    task_id = _create_task(engine, "/media/retry-later.mkv")
+    now = datetime(2026, 8, 31, tzinfo=timezone.utc)
+
+    def fail_with_provider_error(current_task_id: int) -> None:
+        with session_scope(engine) as session:
+            Repository(session).update_video_task_status(
+                current_task_id,
+                "failed",
+                "provider_request_timeout",
+            )
+
+    async def schedule_retry() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=fail_with_provider_error,
+            interval_seconds=0,
+            clock=lambda: now,
+            retry_jitter=lambda value: value,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(schedule_retry())
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        retry_ids = repo.list_retry_wait_task_ids()
+        assert len(retry_ids) == 1
+        retry_task = repo.get_video_task(retry_ids[0])
+        assert retry_task is not None
+        assert retry_task.auto_retry_count == 1
+        assert retry_task.retry_category == "provider_network"
+        assert retry_task.retry_at == (now + timedelta(minutes=1)).replace(tzinfo=None)
+
+    processed: list[int] = []
+
+    def complete(current_task_id: int) -> None:
+        processed.append(current_task_id)
+        with session_scope(engine) as session:
+            Repository(session).update_video_task_status(current_task_id, "completed")
+
+    async def recover_due_retry() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=complete,
+            interval_seconds=0,
+            clock=lambda: now + timedelta(minutes=2),
+            retry_jitter=lambda value: value,
+        )
+        await queue.start(recover=True)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(recover_due_retry())
+
+    assert processed == retry_ids
+    with session_scope(engine) as session:
+        assert Repository(session).get_video_task(retry_ids[0]).status == "completed"
+
+
+def test_successful_task_cancels_pending_auto_retry_for_same_path(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+    path = "/media/already-fixed.mkv"
+    successful_task_id = _create_task(engine, path)
+    now = datetime(2026, 8, 31, tzinfo=timezone.utc)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        failed = repo.create_job(
+            JobCreate(
+                source="test",
+                raw_payload={"physical_video_file_full_path": path},
+                video_path_original=path,
+            )
+        ).video_tasks[0]
+        failed.status = "failed"
+        failed.error_message = "no_candidate_found"
+        pending = repo.create_retry_child(
+            failed,
+            source="auto-retry",
+            status="retry_wait",
+            retry_at=now + timedelta(hours=6),
+            auto_retry_count=1,
+            retry_category="no_candidate",
+        )
+        pending_task_id = pending.id
+
+    processed: list[int] = []
+
+    def complete(current_task_id: int) -> None:
+        processed.append(current_task_id)
+        with session_scope(engine) as session:
+            Repository(session).update_video_task_status(current_task_id, "completed")
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=complete,
+            interval_seconds=0,
+            clock=lambda: now,
+        )
+        await queue.start(recover=False)
+        queue.enqueue(successful_task_id)
+        await queue.join()
+        await queue.stop()
+
+    asyncio.run(run_queue())
+
+    assert processed == [successful_task_id]
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        pending = repo.get_video_task(pending_task_id)
+        assert pending is not None
+        assert pending.status == "skipped_existing_subtitle"
+        assert pending.retry_at is None
+        assert repo.list_retry_wait_task_ids() == []
+        assert repo.list_task_events(pending_task_id)[-1].error_code == (
+            "retry_superseded_by_success"
+        )
+
+
+def test_queue_stop_does_not_wait_for_retry_poll_timeout(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'queue.sqlite3'}")
+    create_tables(engine)
+
+    async def run_queue() -> None:
+        queue = TaskQueue(
+            engine=engine,
+            processor=lambda _task_id: None,
+            interval_seconds=0,
+            retry_poll_seconds=30,
+        )
+        await queue.start(recover=False)
+        await asyncio.wait_for(queue.stop(), timeout=0.5)
+
+    asyncio.run(run_queue())

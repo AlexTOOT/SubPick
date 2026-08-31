@@ -66,6 +66,39 @@ def test_rejects_subtitle_that_is_far_shorter_than_feature_video(tmp_path: Path)
     assert result.duration_seconds == 1199.0
 
 
+def test_rejects_subtitle_that_only_covers_half_hour_episode_halfway(tmp_path: Path) -> None:
+    subtitle = tmp_path / "Episode.zh-cn.srt"
+    subtitle.write_text(
+        "1\n00:20:17,000 --> 00:20:18,000\n你好\n",
+        encoding="utf-8",
+    )
+
+    result = validate_subtitle_file(
+        subtitle,
+        video_duration_seconds=36 * 60 + 21,
+    )
+
+    assert result.is_valid is False
+    assert result.reason == "timeline_too_short"
+    assert result.duration_seconds == 1218.0
+
+
+def test_accepts_half_hour_episode_subtitle_that_ends_before_credits(tmp_path: Path) -> None:
+    subtitle = tmp_path / "Episode.zh-cn.srt"
+    subtitle.write_text(
+        "1\n00:31:57,000 --> 00:31:58,000\n你好\n",
+        encoding="utf-8",
+    )
+
+    result = validate_subtitle_file(
+        subtitle,
+        video_duration_seconds=36 * 60 + 21,
+    )
+
+    assert result.is_valid is True
+    assert result.duration_seconds == 1918.0
+
+
 def test_accepts_subtitle_that_ends_before_feature_credits(tmp_path: Path) -> None:
     subtitle = tmp_path / "Movie.zh-cn.srt"
     subtitle.write_text("1\n01:39:58,000 --> 01:39:59,000\n你好\n", encoding="utf-8")

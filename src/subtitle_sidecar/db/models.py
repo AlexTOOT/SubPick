@@ -50,6 +50,10 @@ class VideoTask(Base):
     result_subtitle_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="queued")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    retry_parent_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

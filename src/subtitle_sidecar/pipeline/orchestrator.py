@@ -687,6 +687,41 @@ class SubtitleOrchestrator:
             )
             if callable(merge_candidate_metadata):
                 merge_candidate_metadata(recorded_candidate.id, content_identity)
+            episode_duplicate_task_id = self._episode_content_duplicate_task_id(
+                task,
+                request=request,
+                content_identity=content_identity,
+            )
+            if episode_duplicate_task_id is not None:
+                last_failure_reason = "episode_content_duplicate"
+                matched_task = self.repository.get_video_task(episode_duplicate_task_id)
+                duplicate_details = {
+                    **event_details,
+                    **content_identity,
+                    "matched_task_id": episode_duplicate_task_id,
+                    "series_id": request.series_id,
+                    "season": task.season,
+                    "episode": task.episode,
+                    "matched_season": getattr(matched_task, "season", None),
+                    "matched_episode": getattr(matched_task, "episode", None),
+                }
+                self._record_task_event(
+                    task_id,
+                    "candidate_filter",
+                    "skipped",
+                    message=(
+                        "跨集正文排除：下载内容与同剧其他分集已落库字幕相同，"
+                        f"来源任务 #{episode_duplicate_task_id}，继续尝试下一候选"
+                    ),
+                    error_code=last_failure_reason,
+                    details=duplicate_details,
+                )
+                self._update_candidate_attempt(
+                    recorded_candidate.id,
+                    status="skipped",
+                    error_message=last_failure_reason,
+                )
+                continue
             duplicate_task_id = self._retry_content_duplicate_task_id(
                 task,
                 content_identity,
@@ -723,13 +758,20 @@ class SubtitleOrchestrator:
             )
             if not validation.is_valid:
                 last_failure_reason = validation.reason or "invalid_subtitle"
+                validation_details = {
+                    **event_details,
+                    "encoding": validation.encoding,
+                    "cue_count": validation.cue_count,
+                    "duration_seconds": validation.duration_seconds,
+                    "video_duration_seconds": video_duration_seconds,
+                }
                 self._record_task_event(
                     task_id,
                     "candidate_validation",
                     "failed",
                     message=last_failure_reason,
                     error_code=last_failure_reason,
-                    details=event_details,
+                    details=validation_details,
                 )
                 self._record_task_event(
                     task_id,
@@ -737,7 +779,7 @@ class SubtitleOrchestrator:
                     "failed",
                     message=last_failure_reason,
                     error_code=last_failure_reason,
-                    details=event_details,
+                    details=validation_details,
                 )
                 self._update_candidate_attempt(
                     recorded_candidate.id,
@@ -1150,7 +1192,13 @@ class SubtitleOrchestrator:
         retry_of_task_id = _positive_int(raw_payload.get("retry_of_task_id"))
         if retry_of_task_id is None:
             return candidates
-        list_candidates = getattr(self.repository, "list_placed_candidates_for_task", None)
+        list_candidates = getattr(self.repository, "list_retry_candidates_for_task", None)
+        if not callable(list_candidates):
+            list_candidates = getattr(
+                self.repository,
+                "list_placed_candidates_for_task",
+                None,
+            )
         if not callable(list_candidates):
             return candidates
 
@@ -1211,7 +1259,7 @@ class SubtitleOrchestrator:
                 "candidate_filter",
                 "skipped",
                 message=(
-                    f"重试候选排除：跳过上次已落库字幕，来源 {candidate.provider}，"
+                    f"重试候选排除：跳过此前已尝试字幕，来源 {candidate.provider}，"
                     f"{candidate.title or '未命名字幕'}，来源任务 #{excluded_from_task_id}，"
                     f"链接 {candidate.source_url or '无'}"
                 ),
@@ -1232,6 +1280,35 @@ class SubtitleOrchestrator:
             if ancestor_task_id is not None:
                 return ancestor_task_id
         return None
+
+    def _episode_content_duplicate_task_id(
+        self,
+        task: Any,
+        *,
+        request: SubtitleSearchRequest,
+        content_identity: dict[str, str],
+    ) -> int | None:
+        if (
+            request.media_type != "episode"
+            or not request.series_id
+            or task.season is None
+            or task.episode is None
+        ):
+            return None
+        find_duplicate = getattr(
+            self.repository,
+            "find_completed_episode_content_duplicate",
+            None,
+        )
+        if not callable(find_duplicate):
+            return None
+        return find_duplicate(
+            series_id=request.series_id,
+            season=task.season,
+            episode=task.episode,
+            content_identity=content_identity,
+            exclude_task_id=task.id,
+        )
 
     def has_cached_bundle(self, task_id: int) -> bool:
         """Return whether a queued episode can complete its provider step from local cache."""
@@ -1296,7 +1373,7 @@ class SubtitleOrchestrator:
                 }:
                     raise NfoIdentityPending(
                         f"等待 MoviePilot 写入有效 NFO：{resolved_path.name}",
-                        retry_after_seconds=min(2.0, remaining),
+                        retry_after_seconds=min(30.0, remaining),
                         details={
                             "video_path": str(resolved_path),
                             "last_error": error.code,
@@ -1319,7 +1396,7 @@ class SubtitleOrchestrator:
             ):
                 raise NfoIdentityPending(
                     f"等待 MoviePilot 完成权威 movie.nfo：{resolved_path.name}",
-                    retry_after_seconds=min(2.0, movie_wait_remaining),
+                    retry_after_seconds=min(30.0, movie_wait_remaining),
                     details={
                         "video_path": str(resolved_path),
                         "fallback_nfo_paths": [str(path) for path in identity.nfo_paths],
@@ -1738,6 +1815,7 @@ class SubtitleOrchestrator:
             "jellyfin-manual": "手动添加",
             "manual": "手动添加",
             "manual-retry": "手动重试",
+            "auto-retry": "自动重试",
             "test": "系统测试添加",
             "system-test": "系统测试添加",
         }
