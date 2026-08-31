@@ -75,6 +75,10 @@ def test_shimu_web_assets_are_self_contained_and_feature_complete():
     assert "data-provider-drag" in js
     assert 'id="media-sort"' in html
     assert 'id="media-sort-direction"' in html
+    assert 'id="task-page-jump"' in html
+    assert 'id="task-page-go"' in html
+    assert "jumpToTaskPage" in js
+    assert "请输入 1 到 ${totalPages} 之间的页码" in js
     assert 'id="server-token"' in html
     assert 'id="server-token-generate"' in html
     assert 'id="setup-progress"' in html
