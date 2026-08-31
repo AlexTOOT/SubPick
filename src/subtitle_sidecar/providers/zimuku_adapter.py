@@ -38,6 +38,7 @@ SUPPORTED_FORMATS = {"srt", "ass", "ssa", "vtt"}
 MAX_ARCHIVE_MEMBERS = 300
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_CAPTURED_CAPTCHAS = 100
+MAX_SEARCH_TIMEOUTS = 2
 CAPTCHA_IMAGE_RE = re.compile(
     r"data:image/(?:bmp|png|jpeg);base64,([A-Za-z0-9+/=\s]+)", re.IGNORECASE
 )
@@ -60,8 +61,7 @@ class ZimukuCaptchaRecognitionError(ZimukuError):
 
 
 class CaptchaSolver(Protocol):
-    def solve(self, image: bytes) -> str:
-        ...
+    def solve(self, image: bytes) -> str: ...
 
 
 class FailedCaptchaRecorder:
@@ -382,9 +382,32 @@ class ZimukuProvider:
         last_query: _SearchQuery | None = None
         try:
             candidates: list[SubtitleCandidate] = []
+            completed_query_count = 0
+            timeout_count = 0
+            last_timeout: Exception | None = None
             for query in _search_queries(request):
                 last_query = query
-                candidates = self._search_one(request, query)
+                try:
+                    candidates = self._search_one(request, query)
+                except Exception as error:
+                    if not _is_provider_timeout(error):
+                        raise
+                    timeout_count += 1
+                    last_timeout = error
+                    if timeout_count >= MAX_SEARCH_TIMEOUTS:
+                        raise
+                    self._emit(
+                        ProviderSearchReport(
+                            provider=self.name,
+                            status="progress",
+                            candidate_count=0,
+                            error="provider_timeout",
+                            reason=query.value,
+                            search_context=_search_context(request, query),
+                        )
+                    )
+                    continue
+                completed_query_count += 1
                 self._emit(
                     ProviderSearchReport(
                         provider=self.name,
@@ -396,6 +419,8 @@ class ZimukuProvider:
                 )
                 if candidates:
                     break
+            if completed_query_count == 0 and last_timeout is not None:
+                raise last_timeout
         except Exception as error:
             self._emit(
                 ProviderSearchReport(
@@ -641,6 +666,18 @@ def _search_queries(request: SubtitleSearchRequest) -> list[_SearchQuery]:
                         strategy="episode_fallback",
                     )
                 )
+        # Some Zimuku series pages are indexed only by their bare work title.
+        # Keep this fallback last so precise season/episode queries remain preferred;
+        # matching work pages still have to pass the normal title, season, and year checks.
+        for title, source in titles:
+            queries.append(
+                _SearchQuery(
+                    value=title,
+                    title=title,
+                    title_source=source,
+                    strategy="title",
+                )
+            )
     else:
         for title, source in titles:
             if request.year:
@@ -672,10 +709,7 @@ def _season_title_query(title: str, season: int) -> str:
 
 def _episode_title_query(title: str, season: int, episode: int) -> str:
     if re.search(r"[\u3400-\u9fff]", title):
-        return (
-            f"{title} 第{_format_chinese_number(season)}季"
-            f"第{_format_chinese_number(episode)}集"
-        )
+        return f"{title} 第{_format_chinese_number(season)}季第{_format_chinese_number(episode)}集"
     return f"{title} Season {season} Episode {episode}"
 
 
@@ -856,12 +890,15 @@ def _work_matches_request(
     query: _SearchQuery,
 ) -> bool:
     episode = request.media_type.lower() in {"episode", "tv", "tvshow"}
-    if not episode and request.year is not None:
+    if request.year is not None:
         years = set(_release_years(work_title))
-        # Festival, theatrical and streaming releases can legitimately differ
-        # by one year between Jellyfin and Zimuku. Keep nearby years eligible;
-        # the common candidate validator still rejects clearly distant years.
-        if years and all(abs(year - request.year) > 1 for year in years):
+        expected_years = {
+            year for year in (request.year, *request.alternate_years) if isinstance(year, int)
+        }
+        # Festival, theatrical, streaming, series-premiere and episode years
+        # can legitimately differ by one year. Keep nearby years eligible;
+        # stable distant work years are safe to reject for both media types.
+        if years and all(abs(year - expected) > 1 for year in years for expected in expected_years):
             return False
     if episode and request.season is not None:
         detected = _season_number(work_title)
@@ -877,10 +914,20 @@ def _work_matches_request(
     chinese_expected = "".join(re.findall(r"[\u3400-\u9fff]", expected))
     chinese_actual = "".join(re.findall(r"[\u3400-\u9fff]", actual))
     if chinese_expected and chinese_actual:
-        return chinese_expected in chinese_actual or chinese_actual in chinese_expected
+        return _chinese_work_identity(expected) == _chinese_work_identity(actual)
     tokens = {token for token in re.findall(r"[a-z0-9]+", expected) if len(token) > 1}
     actual_tokens = set(re.findall(r"[a-z0-9]+", actual))
     return not tokens or len(tokens & actual_tokens) >= max(1, math.ceil(len(tokens) * 0.6))
+
+
+def _chinese_work_identity(value: str) -> str:
+    cleaned = re.sub(
+        r"第\s*[一二三四五六七八九十百零两\d]+\s*(?:季|集)",
+        "",
+        value,
+    )
+    cleaned = re.sub(r"(?:美|英|日|韩|法|德|台|港)版", "", cleaned)
+    return "".join(re.findall(r"[\u3400-\u9fff]", cleaned))
 
 
 def _season_number(value: str) -> int | None:
@@ -898,7 +945,19 @@ def _season_number(value: str) -> int | None:
 
 
 def _chinese_number(value: str) -> int | None:
-    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    digits = {
+        "零": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
     if value in digits:
         return digits[value]
     if "十" in value:
@@ -1014,20 +1073,16 @@ def _prepare_captcha_for_ocr(image: bytes) -> bytes:
             threshold = _otsu_threshold(grayscale.histogram())
             pixels = grayscale.load()
             edge_pixels = [pixels[x, 0] for x in range(grayscale.width)]
-            edge_pixels.extend(
-                pixels[x, grayscale.height - 1] for x in range(grayscale.width)
-            )
+            edge_pixels.extend(pixels[x, grayscale.height - 1] for x in range(grayscale.width))
             edge_pixels.extend(pixels[0, y] for y in range(grayscale.height))
-            edge_pixels.extend(
-                pixels[grayscale.width - 1, y] for y in range(grayscale.height)
-            )
+            edge_pixels.extend(pixels[grayscale.width - 1, y] for y in range(grayscale.height))
             edge_pixels.sort()
             background = edge_pixels[len(edge_pixels) // 2] if edge_pixels else 255
             dark_background = background <= threshold
             normalized = grayscale.point(
-                lambda value: 0
-                if (value > threshold if dark_background else value < threshold)
-                else 255
+                lambda value: (
+                    0 if (value > threshold if dark_background else value < threshold) else 255
+                )
             )
             normalized = normalized.resize(
                 (max(1, normalized.width * 4), max(1, normalized.height * 4)),
@@ -1096,7 +1151,8 @@ def _extract_zip(content: bytes, target_dir: Path) -> list[DownloadedSubtitleMem
             files = [
                 info
                 for info in archive.infolist()
-                if not info.is_dir() and Path(info.filename).suffix.lower().lstrip(".") in SUPPORTED_FORMATS
+                if not info.is_dir()
+                and Path(info.filename).suffix.lower().lstrip(".") in SUPPORTED_FORMATS
             ]
             if len(files) > MAX_ARCHIVE_MEMBERS:
                 raise ZimukuError("zimuku_archive_too_many_members")
@@ -1159,9 +1215,7 @@ def _extract_external_archive(
         extract_root = temporary_path / "extracted"
         extract_root.mkdir()
         if use_unar:
-            _run_archive_tool(
-                [str(unar), "-f", "-D", "-o", str(extract_root), str(archive_path)]
-            )
+            _run_archive_tool([str(unar), "-f", "-D", "-o", str(extract_root), str(archive_path)])
         else:
             try:
                 _run_archive_tool(
@@ -1172,9 +1226,7 @@ def _extract_external_archive(
                     raise
                 shutil.rmtree(extract_root)
                 extract_root.mkdir()
-                _run_archive_tool(
-                    [unar, "-f", "-D", "-o", str(extract_root), str(archive_path)]
-                )
+                _run_archive_tool([unar, "-f", "-D", "-o", str(extract_root), str(archive_path)])
         resolved_root = extract_root.resolve()
         members: list[DownloadedSubtitleMember] = []
         total = 0
@@ -1265,7 +1317,11 @@ def _parse_lsar_entries(output: str) -> list[tuple[str, int]]:
 def _safe_archive_member(value: str) -> bool:
     normalized = value.replace("\\", "/")
     path = Path(normalized)
-    return not path.is_absolute() and ".." not in path.parts and not re.match(r"^[A-Za-z]:", normalized)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and not re.match(r"^[A-Za-z]:", normalized)
+    )
 
 
 def _response_filename(response: Any, url: str) -> str:
@@ -1360,6 +1416,12 @@ def _safe_error(error: Exception) -> str:
     if isinstance(error, httpx.RequestError):
         return "provider_request_failed"
     return error.__class__.__name__
+
+
+def _is_provider_timeout(error: Exception) -> bool:
+    return isinstance(error, httpx.TimeoutException) or (
+        isinstance(error, ZimukuError) and str(error) == "provider_timeout"
+    )
 
 
 def _duration_ms(started_at: float) -> int:

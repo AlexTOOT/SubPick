@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -51,6 +52,20 @@ SEASON_HTML = """
     <span class="label label-info">ASS/SSA</span>
   </td><td><i title="字幕质量:10分"></i></td><td>1.2万</td></tr></tbody></table></div>
 </div></div>
+"""
+
+TED_SEARCH_HTML = """
+<div class="item prel clearfix"><div class="title">
+  <p class="tt clearfix"><a href="/subs/68007.html">泰迪熊 Ted 第一季 (2024)</a></p>
+</div></div>
+"""
+
+TED_SEASON_PAGE_HTML = """
+<table><tbody><tr><td class="first">
+  <img alt="简体中文字幕 English字幕 双语字幕" src="/flag/china.gif">
+  <a href="/detail/227094.html" title="Ted.S01.2024.1080p.WEB-DL">season pack</a>
+  <span class="label label-info">SRT</span>
+</td><td><i title="字幕质量:9.5分"></i></td><td>2048</td></tr></tbody></table>
 """
 
 MULTI_CANDIDATE_HTML = """
@@ -124,6 +139,33 @@ class FullPageClient(SearchClient):
         return FakeResponse(text=f"<table><tbody>{rows}</tbody></table>", url=str(url))
 
 
+class BareTitleSeasonClient(SearchClient):
+    def __init__(self) -> None:
+        super().__init__(html="")
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if str(url).endswith("/subs/68007.html"):
+            return FakeResponse(text=TED_SEASON_PAGE_HTML, url=str(url))
+        query = str((kwargs.get("params") or {}).get("q") or "")
+        html = TED_SEARCH_HTML if query == "泰迪熊" else "<html></html>"
+        return FakeResponse(text=html, url=str(url))
+
+
+class TimeoutThenSearchClient(SearchClient):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if len(self.calls) == 1:
+            raise httpx.ReadTimeout("temporary search timeout")
+        return FakeResponse(text=self.html, url=str(url))
+
+
+class AlwaysTimeoutClient(SearchClient):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        raise httpx.ReadTimeout("search timeout")
+
+
 def movie_request() -> SubtitleSearchRequest:
     return SubtitleSearchRequest(
         video_path=Path("How.to.Train.Your.Dragon.2025.mkv"),
@@ -184,6 +226,37 @@ def test_movie_search_falls_back_to_plain_localized_and_original_titles() -> Non
     ]
 
 
+def test_search_continues_with_next_strategy_after_one_timeout() -> None:
+    client = TimeoutThenSearchClient()
+    reports = []
+    provider = ZimukuProvider(client=client, request_delay_seconds=0)
+    provider.set_reporter(reports.append)
+
+    candidates = provider.search(movie_request())
+
+    assert len(candidates) == 1
+    timeout_report = next(
+        report for report in reports if report.status == "progress" and report.error
+    )
+    assert timeout_report.error == "provider_timeout"
+    assert timeout_report.reason == "新·驯龙高手 2025"
+    assert reports[-1].status == "completed"
+
+
+def test_search_stops_after_two_timeouts_and_reports_failure() -> None:
+    client = AlwaysTimeoutClient()
+    reports = []
+    provider = ZimukuProvider(client=client, request_delay_seconds=0)
+    provider.set_reporter(reports.append)
+
+    with pytest.raises(httpx.ReadTimeout):
+        provider.search(episode_request())
+
+    assert len(client.calls) == 2
+    assert [report.status for report in reports] == ["started", "progress", "failed"]
+    assert reports[-1].error == "provider_timeout"
+
+
 def test_movie_work_page_accepts_adjacent_release_year_when_title_matches() -> None:
     html = SEARCH_HTML.replace("(2025)", "(2024)")
 
@@ -208,6 +281,21 @@ def test_movie_work_page_rejects_distant_release_year() -> None:
     )
 
     assert pages == []
+
+
+def test_movie_work_page_accepts_explicit_alternate_release_year() -> None:
+    request = replace(movie_request(), year=2026, alternate_years=(2024,))
+    html = SEARCH_HTML.replace("(2025)", "(2024)")
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("新·驯龙高手", "新·驯龙高手", "title", "title"),
+    )
+
+    assert pages == [
+        ("新·驯龙高手 How to Train Your Dragon (2024)", "//zimuku.org/subs/73237.html")
+    ]
 
 
 def test_work_results_keep_bilingual_rows_and_parse_real_download_column() -> None:
@@ -301,7 +389,105 @@ def test_episode_search_tries_localized_season_names_before_codes() -> None:
         ("Ted Season 2 Episode 4", "episode_localized"),
         ("泰迪熊 S02E04", "episode_fallback"),
         ("Ted S02E04", "episode_fallback"),
+        ("泰迪熊", "title"),
+        ("Ted", "title"),
     ]
+
+
+def test_episode_search_falls_back_to_bare_title_after_specific_queries() -> None:
+    request = replace(
+        episode_request(),
+        title="泰迪熊",
+        original_title="Ted",
+        year=2024,
+        season=1,
+        episode=4,
+    )
+    client = BareTitleSeasonClient()
+
+    candidates = ZimukuProvider(client=client, request_delay_seconds=0).search(request)
+
+    assert [candidate.source_url for candidate in candidates] == [
+        "https://zimuku.org/detail/227094.html"
+    ]
+    search_queries = [call[1]["params"]["q"] for call in client.calls if "params" in call[1]]
+    assert search_queries[-1] == "泰迪熊"
+    assert all(query != "泰迪熊" for query in search_queries[:-1])
+
+
+def test_episode_work_page_accepts_trusted_season_year_as_alternate() -> None:
+    request = replace(
+        episode_request(),
+        title="泰迪熊",
+        original_title="Ted",
+        year=2024,
+        alternate_years=(2026,),
+        season=2,
+        episode=3,
+    )
+    html = TED_SEARCH_HTML.replace("第一季 (2024)", "第二季 (2026)")
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("泰迪熊", "泰迪熊", "title", "title"),
+    )
+
+    assert pages == [("泰迪熊 Ted 第二季 (2026)", "/subs/68007.html")]
+    assert (
+        _matching_work_pages(
+            html,
+            request=replace(request, alternate_years=()),
+            query=_SearchQuery("泰迪熊", "泰迪熊", "title", "title"),
+        )
+        == []
+    )
+
+
+def test_episode_work_rejects_distant_same_substring_series() -> None:
+    request = replace(
+        episode_request(),
+        title="办公室",
+        original_title="The Office",
+        year=2005,
+        season=2,
+        episode=1,
+    )
+    html = SEASON_HTML.replace(
+        "大楼里只有谋杀 Only Murders in the Building 第一季 (2021)",
+        "传奇办公室 第二季 Le Bureau des Légendes (2016)",
+    )
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("办公室 第二季", "办公室", "title", "season_pack_localized"),
+    )
+
+    assert pages == []
+
+
+def test_chinese_work_title_does_not_accept_unrelated_prefix() -> None:
+    request = replace(
+        episode_request(),
+        title="办公室",
+        original_title=None,
+        year=None,
+        season=2,
+        episode=1,
+    )
+    html = SEASON_HTML.replace(
+        "大楼里只有谋杀 Only Murders in the Building 第一季 (2021)",
+        "传奇办公室 第二季",
+    )
+
+    pages = _matching_work_pages(
+        html,
+        request=request,
+        query=_SearchQuery("办公室 第二季", "办公室", "title", "season_pack_localized"),
+    )
+
+    assert pages == []
 
 
 class FixedSolver:
@@ -378,16 +564,18 @@ def test_moviepilot_ocr_solver_uses_base64_contract() -> None:
 def test_moviepilot_ocr_invalid_answer_is_recorded_before_fallback(tmp_path: Path) -> None:
     recorder = FailedCaptchaRecorder(tmp_path)
     chain = CaptchaSolverChain(
-        [MoviePilotOcrSolver(base_url="http://ocr", client=OcrClient("not-a-number")), FixedSolver()],
+        [
+            MoviePilotOcrSolver(base_url="http://ocr", client=OcrClient("not-a-number")),
+            FixedSolver(),
+        ],
         recorder=recorder,
     )
 
     assert chain.solve(b"BM123") == "26584"
     metadata = list(tmp_path.glob("*.json"))
     assert len(metadata) == 1
-    assert (
-        '"answer": "raw=not-a-number; preprocessed=not-a-number"'
-        in metadata[0].read_text(encoding="utf-8")
+    assert '"answer": "raw=not-a-number; preprocessed=not-a-number"' in metadata[0].read_text(
+        encoding="utf-8"
     )
     assert '"reason": "invalid_answer"' in metadata[0].read_text(encoding="utf-8")
 
@@ -448,8 +636,7 @@ def test_rejected_captcha_attempts_are_persisted_when_enabled(tmp_path: Path) ->
     assert len(list(tmp_path.glob("*.bmp"))) == 3
     assert all('"answer": "26584"' in path.read_text(encoding="utf-8") for path in metadata)
     assert all(
-        '"reason": "rejected_by_zimuku"' in path.read_text(encoding="utf-8")
-        for path in metadata
+        '"reason": "rejected_by_zimuku"' in path.read_text(encoding="utf-8") for path in metadata
     )
 
 
@@ -466,9 +653,13 @@ class DownloadClient(SearchClient):
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         if str(url).endswith("/detail/710623.html"):
-            return FakeResponse(text='<a id="down1" href="/dld/710623.html">download</a>', url=str(url))
+            return FakeResponse(
+                text='<a id="down1" href="/dld/710623.html">download</a>', url=str(url)
+            )
         if str(url).endswith("/dld/710623.html"):
-            return FakeResponse(text='<a rel="nofollow" href="/download/pack.zip">file</a>', url=str(url))
+            return FakeResponse(
+                text='<a rel="nofollow" href="/download/pack.zip">file</a>', url=str(url)
+            )
         if str(url).endswith("/download/pack.zip"):
             return FakeResponse(
                 content=self.archive,
@@ -511,7 +702,9 @@ def test_movie_archive_selects_chinese_bilingual_member_as_primary(tmp_path: Pat
         request_base_url="https://srtku.com",
     )[0]
 
-    downloaded = ZimukuProvider(client=client, request_delay_seconds=0).download(candidate, tmp_path)
+    downloaded = ZimukuProvider(client=client, request_delay_seconds=0).download(
+        candidate, tmp_path
+    )
 
     assert downloaded.path.name.endswith("Movie.ChsEng.ass")
 

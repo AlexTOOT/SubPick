@@ -449,6 +449,10 @@ class VideoTaskSummaryResponse(BaseModel):
     status: str
     video_path_original: str
     result_subtitle_path: str | None
+    retry_at: datetime | None
+    auto_retry_count: int
+    retry_category: str | None
+    retry_parent_task_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -510,6 +514,10 @@ class VideoTaskDetailResponse(BaseModel):
     video_path_original: str
     video_path_resolved: str | None
     result_subtitle_path: str | None
+    retry_at: datetime | None
+    auto_retry_count: int
+    retry_category: str | None
+    retry_parent_task_id: int | None
     created_at: datetime
     updated_at: datetime
     candidates: list[SubtitleCandidateResponse]

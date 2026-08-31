@@ -318,6 +318,154 @@ def test_candidate_mismatch_rejects_unrelated_title_but_accepts_original_title_m
     ) is None
 
 
+def test_assrt_short_chinese_title_accepts_direct_containment() -> None:
+    subtitle = SubtitleCandidate(
+        provider="assrt",
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title="群体中文字幕",
+        source_url="https://example.invalid/short-title",
+        release_info="群体.2026.WEB-DL",
+        confidence=0.8,
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=None,
+        episode=None,
+        year=2026,
+        title="群体",
+    ) is None
+
+
+def test_stable_zimuku_work_title_rejects_unrelated_search_result() -> None:
+    subtitle = SubtitleCandidate(
+        provider="zimuku",
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title="generic.release.2026.srt",
+        source_url="https://example.invalid/unrelated-zimuku",
+        release_info="WEB-DL",
+        confidence=0.8,
+        raw_metadata={"zimuku_work_title": "The Wrong Colony (2026)"},
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=None,
+        episode=None,
+        year=2026,
+        title="群体",
+        original_title="Colony",
+    ) == "title_mismatch"
+
+
+def test_stable_subdl_work_title_accepts_original_title() -> None:
+    subtitle = SubtitleCandidate(
+        provider="subdl",
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title="generic.srt",
+        source_url="https://example.invalid/subdl-match",
+        release_info="WEB-DL",
+        confidence=0.8,
+        raw_metadata={"subdl_work_titles": ["Colony"]},
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=None,
+        episode=None,
+        year=2026,
+        title="群体",
+        original_title="Colony",
+    ) is None
+
+
+def test_episode_rejects_same_name_series_from_distant_stable_work_year() -> None:
+    subtitle = SubtitleCandidate(
+        provider="zimuku",
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title="The.Office.S02E01.srt",
+        source_url="https://example.invalid/the-office-uk",
+        release_info="The.Office.S02E01",
+        confidence=0.8,
+        raw_metadata={
+            "zimuku_work_title": "The Office 第二季 (2001)",
+            "zimuku_work_year": 2001,
+        },
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=2,
+        episode=1,
+        year=2005,
+        title="办公室",
+        original_title="The Office",
+    ) == "year_mismatch"
+
+
+def test_episode_accepts_stable_work_title_with_localized_season_labels() -> None:
+    subtitle = SubtitleCandidate(
+        provider="zimuku",
+        language="zh-cn",
+        is_bilingual=True,
+        format="ass",
+        title="Fallout.S01E01-E08.ass",
+        source_url="https://example.invalid/fallout-season-pack",
+        release_info="Fallout.S01E01-E08.1080p.WEB-DL",
+        confidence=0.8,
+        raw_metadata={
+            "zimuku_work_title": "辐射 第一季 Fallout Season 1 (2024)",
+            "zimuku_work_year": 2024,
+        },
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=1,
+        episode=3,
+        year=2024,
+        title="辐射",
+        original_title="Fallout",
+    ) is None
+
+
+def test_movie_candidate_accepts_explicit_alternate_release_year() -> None:
+    subtitle = SubtitleCandidate(
+        provider="zimuku",
+        language="zh-cn",
+        is_bilingual=False,
+        format="srt",
+        title="Festival.Movie.2026",
+        source_url="https://example.invalid/alternate-year",
+        release_info="Festival.Movie.2026.WEB-DL",
+        confidence=0.8,
+    )
+
+    assert candidate_mismatch_reason(
+        subtitle,
+        season=None,
+        episode=None,
+        year=2024,
+        alternate_years=(2026,),
+        title="Festival Movie",
+    ) is None
+
+
+def test_episode_range_accepts_middle_episode_and_rejects_outside_episode() -> None:
+    season_range = candidate("zh-cn", False, "Show.S01E01-E03.1080p.WEB-DL")
+
+    assert episode_mismatch_reason(season_range, season=1, episode=2) is None
+    assert episode_mismatch_reason(season_range, season=1, episode=4) == "episode_mismatch"
+
+
 def test_episode_candidate_rejects_same_title_feature_film_without_episode_markers() -> None:
     feature = SubtitleCandidate(
         provider="assrt",

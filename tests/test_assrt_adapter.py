@@ -6,6 +6,7 @@ from subtitle_sidecar.providers.assrt_adapter import (
     AssrtApiError,
     AssrtProvider,
     _assrt_provider_quality,
+    _assert_movie_year_compatible,
     _download_direct_files,
     _parse_7zip_members,
     _supported_direct_files,
@@ -375,6 +376,27 @@ def test_assrt_rejects_conflicting_detail_filename_before_binary_download(tmp_pa
     else:
         raise AssertionError("conflicting detail filename was accepted")
     assert not any("wrong-year.srt" in call[0] for call in client.calls)
+
+
+def test_assrt_detail_year_guard_accepts_alternate_release_year() -> None:
+    client = WrongYearDetailClient()
+    provider = AssrtProvider(token="test-token", client=client, sleeper=lambda _: None)
+    request = SubtitleSearchRequest(
+        video_path=Path("/media/Target.Movie.2025.mkv"),
+        title="目标电影",
+        original_title="Target Movie",
+        year=2025,
+        alternate_years=(2010,),
+        media_type="movie",
+        season=None,
+        episode=None,
+        preferred="bilingual",
+        fallback_languages=["zh-cn"],
+    )
+
+    candidate = provider.search(request)[0]
+
+    _assert_movie_year_compatible(candidate, ["Target.Movie.2010.zh-CN.srt"])
 
 
 def test_assrt_rejects_unrelated_chinese_title_collision() -> None:

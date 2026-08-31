@@ -5,6 +5,36 @@ from subtitle_sidecar.db.repository import JellyfinMediaItemData, JobCreate, Rep
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
 
 
+def test_patch_setting_preserves_unrelated_fields(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    create_tables(engine)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        repo.set_setting(
+            "runtime_metadata",
+            {
+                "setup_wizard_dismissed": True,
+                "moviepilot_path_issue": {"received_path": "/mp/media/Movie.mkv"},
+            },
+        )
+
+    with session_scope(engine) as session:
+        patched = Repository(session).patch_setting(
+            "runtime_metadata",
+            {
+                "zimuku_last_check_status": "failed",
+                "zimuku_last_checked_at": "2026-08-31T00:00:00+00:00",
+            },
+        )
+        assert patched.value_json == {
+            "setup_wizard_dismissed": True,
+            "moviepilot_path_issue": {"received_path": "/mp/media/Movie.mkv"},
+            "zimuku_last_check_status": "failed",
+            "zimuku_last_checked_at": "2026-08-31T00:00:00+00:00",
+        }
+
+
 def test_create_job_and_video_task(tmp_path) -> None:
     engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
     create_tables(engine)
@@ -465,6 +495,72 @@ def test_update_candidate_attempt_persists_status_error_and_attempts(tmp_path) -
     assert loaded_task.candidates[0].attempt_count == 1
     assert loaded_task.candidates[0].last_attempt_status == "failed"
     assert loaded_task.candidates[0].last_error_message == "missing_timestamps"
+
+
+def test_find_completed_episode_content_duplicate_only_matches_other_episode(
+    tmp_path,
+) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    create_tables(engine)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        job = repo.create_job(
+            JobCreate(
+                source="moviepilot-csf",
+                raw_payload={
+                    "physical_video_file_full_path": "/media/Show/S01E01.mkv",
+                    "media_identity": {"series_id": "tmdb:123"},
+                },
+                video_path_original="/media/Show/S01E01.mkv",
+            )
+        )
+        task = job.video_tasks[0]
+        task.season = 1
+        task.episode = 1
+        candidate = repo.record_candidate(
+            video_task_id=task.id,
+            provider="fake",
+            language="zh-cn",
+            is_bilingual=False,
+            format="srt",
+            title="Show S01E01",
+            score=90,
+            release_info="WEB-DL",
+            source_url="https://example.invalid/1",
+            raw_metadata={
+                "content_sha256": "same-content",
+                "text_fingerprint": "same-text",
+            },
+        )
+        repo.record_artifact(
+            video_task_id=task.id,
+            candidate_id=candidate.id,
+            kind="placed",
+            path="/media/Show/S01E01.zh.srt",
+            is_synced=False,
+        )
+        repo.update_video_task_status(task.id, "completed")
+        placed_task_id = task.id
+
+        assert repo.find_completed_episode_content_duplicate(
+            series_id="tmdb:123",
+            season=1,
+            episode=2,
+            content_identity={"content_sha256": "same-content"},
+        ) == placed_task_id
+        assert repo.find_completed_episode_content_duplicate(
+            series_id="tmdb:123",
+            season=1,
+            episode=1,
+            content_identity={"text_fingerprint": "same-text"},
+        ) is None
+        assert repo.find_completed_episode_content_duplicate(
+            series_id="tmdb:999",
+            season=1,
+            episode=2,
+            content_identity={"content_sha256": "same-content"},
+        ) is None
 
 
 def test_update_candidate_attempt_increment_true_increments_real_db_row(tmp_path) -> None:

@@ -150,12 +150,17 @@ def test_create_tables_adds_safe_missing_columns_without_rewriting_existing_sqli
     assert "media_server_id" in video_task_columns
     assert "result_subtitle_path" in video_task_columns
     assert "error_message" in video_task_columns
+    assert "retry_at" in video_task_columns
+    assert "auto_retry_count" in video_task_columns
+    assert "retry_category" in video_task_columns
+    assert "retry_parent_task_id" in video_task_columns
 
     with engine.connect() as connection:
         row = connection.execute(
             text(
                 """
-                SELECT video_path_original, status, result_subtitle_path, error_message
+                SELECT video_path_original, status, result_subtitle_path, error_message,
+                       retry_at, auto_retry_count, retry_category, retry_parent_task_id
                 FROM video_tasks
                 WHERE id = 1
                 """
@@ -166,6 +171,10 @@ def test_create_tables_adds_safe_missing_columns_without_rewriting_existing_sqli
     assert row.status == "queued"
     assert row.result_subtitle_path is None
     assert row.error_message is None
+    assert row.retry_at is None
+    assert row.auto_retry_count == 0
+    assert row.retry_category is None
+    assert row.retry_parent_task_id is None
 
 
 def test_create_tables_adds_missing_default_expression_timestamp_columns_to_legacy_sqlite_table(tmp_path) -> None:

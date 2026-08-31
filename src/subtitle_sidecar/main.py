@@ -179,14 +179,13 @@ def _record_provider_health(
 ) -> None:
     with session_scope(engine) as session:
         repo = Repository(session)
-        metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
-        metadata.update(
+        repo.patch_setting(
+            RUNTIME_METADATA_SETTING_KEY,
             {
                 f"{name}_last_check_status": status,
                 f"{name}_last_checked_at": datetime.now(UTC).isoformat(),
-            }
+            },
         )
-        repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
         repo.record_system_event(
             category="provider",
             event="provider_health_checked",
@@ -216,34 +215,49 @@ async def _run_startup_provider_checks(app: FastAPI) -> None:
 
     checks: list[tuple[str, Callable[[], object]]] = []
     if assrt.enabled and assrt.token:
+
         def check_assrt() -> int:
             factory = getattr(app.state, "assrt_provider_factory", None)
-            provider = factory(assrt) if factory else AssrtProvider(
-                token=assrt.token,
-                timeout_seconds=assrt.timeout_seconds,
-                requests_per_minute=assrt.requests_per_minute,
+            provider = (
+                factory(assrt)
+                if factory
+                else AssrtProvider(
+                    token=assrt.token,
+                    timeout_seconds=assrt.timeout_seconds,
+                    requests_per_minute=assrt.requests_per_minute,
+                )
             )
             return provider.quota()
 
         checks.append(("assrt", check_assrt))
     if subdl.enabled and subdl.api_key:
+
         def check_subdl() -> dict:
             factory = getattr(app.state, "subdl_provider_factory", None)
-            provider = factory(subdl) if factory else SubdlProvider(
-                api_key=subdl.api_key,
-                timeout_seconds=subdl.timeout_seconds,
-                requests_per_minute=subdl.requests_per_minute,
-                use_api_key_for_downloads=subdl.use_api_key_for_downloads,
+            provider = (
+                factory(subdl)
+                if factory
+                else SubdlProvider(
+                    api_key=subdl.api_key,
+                    timeout_seconds=subdl.timeout_seconds,
+                    requests_per_minute=subdl.requests_per_minute,
+                    use_api_key_for_downloads=subdl.use_api_key_for_downloads,
+                )
             )
             return provider.usage()
 
         checks.append(("subdl", check_subdl))
     if zimuku.enabled and zimuku.moviepilot_ocr_url:
+
         def check_zimuku_ocr() -> int:
             factory = getattr(app.state, "zimuku_ocr_solver_factory", None)
-            solver = factory(zimuku) if factory else MoviePilotOcrSolver(
-                base_url=zimuku.moviepilot_ocr_url,
-                timeout_seconds=zimuku.timeout_seconds,
+            solver = (
+                factory(zimuku)
+                if factory
+                else MoviePilotOcrSolver(
+                    base_url=zimuku.moviepilot_ocr_url,
+                    timeout_seconds=zimuku.timeout_seconds,
+                )
             )
             duration_ms = solver.check_available()
             if solver.last_check_answer != MoviePilotOcrSolver.CHECK_EXPECTED_ANSWER:
@@ -252,13 +266,18 @@ async def _run_startup_provider_checks(app: FastAPI) -> None:
 
         checks.append(("zimuku", check_zimuku_ocr))
     elif zimuku.enabled and zimuku.anti_captcha_api_key:
+
         def check_zimuku_balance() -> float:
             factory = getattr(app.state, "zimuku_provider_factory", None)
-            provider = factory(zimuku) if factory else ZimukuProvider(
-                anti_captcha_api_key=zimuku.anti_captcha_api_key,
-                base_url=zimuku.base_url,
-                timeout_seconds=zimuku.timeout_seconds,
-                request_delay_seconds=zimuku.request_delay_seconds,
+            provider = (
+                factory(zimuku)
+                if factory
+                else ZimukuProvider(
+                    anti_captcha_api_key=zimuku.anti_captcha_api_key,
+                    base_url=zimuku.base_url,
+                    timeout_seconds=zimuku.timeout_seconds,
+                    request_delay_seconds=zimuku.request_delay_seconds,
+                )
             )
             return provider.captcha_balance()
 
@@ -280,9 +299,13 @@ async def _run_startup_provider_checks(app: FastAPI) -> None:
 def _build_bundle_cache_probe(settings: AppSettings, engine) -> Callable[[int], bool]:
     def has_cached_bundle(task_id: int) -> bool:
         with session_scope(engine) as session:
+            repository = Repository(session)
+            task = repository.get_video_task(task_id)
+            if task is not None and getattr(task.job, "source", None) == "manual-retry":
+                return True
             orchestrator = SubtitleOrchestrator(
                 settings,
-                Repository(session),
+                repository,
                 MediaResolver(settings.paths),
                 ProviderRegistry([]),
             )
@@ -344,7 +367,8 @@ def create_app(
                         "received_path": last_callback_path,
                         "detected_at": (
                             str(previous_issue.get("detected_at"))
-                            if isinstance(previous_issue, dict) and previous_issue.get("detected_at")
+                            if isinstance(previous_issue, dict)
+                            and previous_issue.get("detected_at")
                             else datetime.now(UTC).isoformat()
                         ),
                     }
@@ -379,12 +403,8 @@ def create_app(
                     "database_schema_version": DATABASE_SCHEMA_VERSION,
                 },
             )
-        await app.state.task_queue.start(
-            recover=app.state.settings.queue.recover_interrupted_tasks
-        )
-        app.state.provider_health_task = asyncio.create_task(
-            _run_startup_provider_checks(app)
-        )
+        await app.state.task_queue.start(recover=app.state.settings.queue.recover_interrupted_tasks)
+        app.state.provider_health_task = asyncio.create_task(_run_startup_provider_checks(app))
         try:
             yield
         finally:

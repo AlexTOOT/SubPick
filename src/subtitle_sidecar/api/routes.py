@@ -108,7 +108,12 @@ from subtitle_sidecar.jellyfin.client import JellyfinClient
 from subtitle_sidecar.jellyfin.subtitle_status import SubtitleStatus, detect_subtitle_status
 from subtitle_sidecar.media.subtitles import SUBTITLE_EXTENSIONS
 from subtitle_sidecar.media.resolver import MediaResolver
-from subtitle_sidecar.pipeline.status import TASK_COMPLETED
+from subtitle_sidecar.pipeline.status import (
+    TASK_COMPLETED,
+    TASK_QUEUED,
+    TASK_RETRY_WAIT,
+    TERMINAL_TASK_STATUSES,
+)
 from subtitle_sidecar.diagnostics import build_diagnostics
 from subtitle_sidecar.observability import emit_structured_log
 from subtitle_sidecar.providers.assrt_adapter import AssrtProvider
@@ -449,11 +454,10 @@ def create_api_router() -> APIRouter:
                     source="moviepilot-csf",
                     raw_payload=payload.model_dump(exclude_none=True),
                     video_path_original=payload.physical_video_file_full_path,
-                    media_server_id=payload.media_server_inside_video_id,
+                    media_server_id=payload.media_server_inside_video_id or None,
                 )
             )
             task_id = job.video_tasks[0].id
-        _enrich_moviepilot_task(request, task_id, payload.media_server_inside_video_id)
         _enqueue_task(request, task_id)
         return AddJobResponse(job_id=job.id, status=job.status)
 
@@ -1449,10 +1453,6 @@ def create_api_router() -> APIRouter:
                         },
                         video_path_original=item.path,
                         media_server_id=item.jellyfin_item_id,
-                        title=item.series_name or item.name,
-                        year=item.year,
-                        season=item.season,
-                        episode=item.episode,
                     )
                     for item in valid_items
                 ]
@@ -1495,8 +1495,12 @@ def create_api_router() -> APIRouter:
                         )
                     )
                     continue
-                retry_job_id, retry_task_id, retry_status = _create_retry_task(repo, original_task)
-            _enqueue_task(request, retry_task_id)
+                retry_job_id, retry_task_id, retry_status, retry_created = _create_retry_task(
+                    repo,
+                    original_task,
+                )
+            if retry_created and retry_status == TASK_QUEUED:
+                _enqueue_task(request, retry_task_id)
             results.append(
                 BatchRetryTaskResultResponse(
                     task_id=task_id,
@@ -1600,9 +1604,13 @@ def create_api_router() -> APIRouter:
             if original_task is None:
                 raise HTTPException(status_code=404, detail="Task not found")
 
-            retry_job_id, retry_task_id, retry_status = _create_retry_task(repo, original_task)
+            retry_job_id, retry_task_id, retry_status, retry_created = _create_retry_task(
+                repo,
+                original_task,
+            )
 
-        _enqueue_task(request, retry_task_id)
+        if retry_created and retry_status == TASK_QUEUED:
+            _enqueue_task(request, retry_task_id)
         return RetryTaskResponse(
             job_id=retry_job_id,
             task_id=retry_task_id,
@@ -1636,23 +1644,48 @@ def _enqueue_task(request: Request, task_id: int) -> None:
     request.app.state.enqueue_task(task_id)
 
 
-def _create_retry_task(repo: Repository, original_task: VideoTask) -> tuple[int, int, str]:
-    raw_payload = dict(original_task.job.raw_payload_json)
-    raw_payload["retry_of_task_id"] = original_task.id
-    retry_job = repo.create_job(
-        JobCreate(
-            source="manual-retry",
-            raw_payload=raw_payload,
-            video_path_original=original_task.video_path_original,
-            media_server_id=original_task.media_server_id,
-        )
+def _create_retry_task(
+    repo: Repository,
+    original_task: VideoTask,
+) -> tuple[int, int, str, bool]:
+    existing = repo.find_in_flight_task_for_path(
+        original_task.video_path_original,
+        alternate_path=original_task.video_path_resolved,
+        exclude_task_id=(
+            original_task.id
+            if original_task.status in TERMINAL_TASK_STATUSES
+            else None
+        ),
     )
-    retry_task = retry_job.video_tasks[0]
-    retry_task.title = original_task.title
-    retry_task.year = original_task.year
-    retry_task.season = original_task.season
-    retry_task.episode = original_task.episode
-    return retry_job.id, retry_task.id, retry_task.status
+    if existing is not None:
+        if existing.job.source != "auto-retry" or existing.status not in {
+            TASK_QUEUED,
+            TASK_RETRY_WAIT,
+        }:
+            return existing.job_id, existing.id, existing.status, False
+        canceled_ids = repo.cancel_pending_auto_retries_for_path(
+            original_task.video_path_original,
+            alternate_path=original_task.video_path_resolved,
+            completed_task_id=original_task.id,
+        )
+        for canceled_task_id in canceled_ids:
+            repo.record_task_event(
+                video_task_id=canceled_task_id,
+                stage="retry_wait",
+                status="skipped",
+                message=f"用户已从任务 #{original_task.id} 发起手动重试，取消延迟重试",
+                error_code="retry_superseded_by_manual_retry",
+                details={"manual_retry_of_task_id": original_task.id},
+            )
+    retry_task = repo.create_retry_child(
+        original_task,
+        source="manual-retry",
+        status=TASK_QUEUED,
+        retry_at=None,
+        auto_retry_count=0,
+        retry_category=None,
+    )
+    return retry_task.job_id, retry_task.id, retry_task.status, True
 
 
 def _delete_task(
@@ -1780,94 +1813,6 @@ def _load_jellyfin_config(request: Request, repo: Repository) -> dict[str, str]:
         "server_url": str(stored.get("server_url") or defaults.get("server_url") or ""),
         "api_key": str(stored.get("api_key") or defaults.get("api_key") or ""),
         "user_id": str(stored.get("user_id") or defaults.get("user_id") or ""),
-    }
-
-
-def _enrich_moviepilot_task(
-    request: Request,
-    task_id: int,
-    jellyfin_item_id: str | None,
-) -> None:
-    metadata: dict | None = None
-    lookup_error: str | None = None
-    with session_scope(request.app.state.engine) as session:
-        repo = Repository(session)
-        config = _load_jellyfin_config(request, repo)
-        task = repo.get_video_task(task_id)
-        cached = repo.get_jellyfin_media_item(jellyfin_item_id)
-        if cached is None and task is not None:
-            cached = repo.get_jellyfin_media_item_by_path(task.video_path_original)
-        if cached is not None:
-            metadata = _jellyfin_metadata_from_cached_item(cached)
-
-    if jellyfin_item_id and config["server_url"] and config["api_key"]:
-        try:
-            metadata = _jellyfin_client(request, config).get_item(jellyfin_item_id)
-        except Exception as error:
-            lookup_error = type(error).__name__
-
-    with session_scope(request.app.state.engine) as session:
-        repo = Repository(session)
-        task = repo.get_video_task(task_id)
-        if task is None:
-            return
-        if metadata is not None:
-            task.title = str(metadata.get("series_name") or metadata.get("name") or "") or task.title
-            task.year = metadata.get("year") if isinstance(metadata.get("year"), int) else task.year
-            task.season = (
-                metadata.get("season") if isinstance(metadata.get("season"), int) else task.season
-            )
-            task.episode = (
-                metadata.get("episode") if isinstance(metadata.get("episode"), int) else task.episode
-            )
-            raw_payload = dict(task.job.raw_payload_json or {})
-            raw_payload["jellyfin_metadata"] = {
-                "name": metadata.get("name"),
-                "series_name": metadata.get("series_name"),
-                "original_title": metadata.get("original_title"),
-                "year": metadata.get("year"),
-                "season": metadata.get("season"),
-                "episode": metadata.get("episode"),
-                "provider_ids": metadata.get("provider_ids") or {},
-            }
-            task.job.raw_payload_json = raw_payload
-            repo.record_task_event(
-                task.id,
-                "metadata",
-                "completed",
-                message=(
-                    f"Jellyfin 元数据：{task.title or '标题未知'}"
-                    f"，年份 {task.year or '未知'}"
-                    f"，来源 {'实时查询' if lookup_error is None and jellyfin_item_id else '媒体库缓存'}"
-                ),
-                details={
-                    "source": "jellyfin",
-                    "jellyfin_item_id": jellyfin_item_id,
-                    "year": task.year,
-                    "season": task.season,
-                    "episode": task.episode,
-                    "lookup_error": lookup_error,
-                },
-            )
-        elif lookup_error is not None:
-            repo.record_task_event(
-                task.id,
-                "metadata",
-                "warning",
-                message=f"Jellyfin 元数据查询失败：{lookup_error}，将使用任务路径继续",
-                details={"source": "jellyfin", "lookup_error": lookup_error},
-            )
-
-
-def _jellyfin_metadata_from_cached_item(item) -> dict:
-    return {
-        "name": item.name,
-        "series_name": item.series_name,
-        "original_title": item.original_title,
-        "year": item.year,
-        "season": item.season,
-        "episode": item.episode,
-        "provider_ids": item.provider_ids_json or {},
     }
 
 
@@ -2438,6 +2383,10 @@ def _to_task_summary(task: VideoTask) -> VideoTaskSummaryResponse:
         status=task.status,
         video_path_original=task.video_path_original,
         result_subtitle_path=task.result_subtitle_path,
+        retry_at=_as_utc(task.retry_at) if task.retry_at is not None else None,
+        auto_retry_count=task.auto_retry_count,
+        retry_category=task.retry_category,
+        retry_parent_task_id=task.retry_parent_task_id,
         created_at=_as_utc(task.created_at),
         updated_at=_as_utc(task.updated_at),
     )
@@ -2452,6 +2401,10 @@ def _to_task_detail(task: VideoTask) -> VideoTaskDetailResponse:
         video_path_original=task.video_path_original,
         video_path_resolved=task.video_path_resolved,
         result_subtitle_path=task.result_subtitle_path,
+        retry_at=_as_utc(task.retry_at) if task.retry_at is not None else None,
+        auto_retry_count=task.auto_retry_count,
+        retry_category=task.retry_category,
+        retry_parent_task_id=task.retry_parent_task_id,
         created_at=_as_utc(task.created_at),
         updated_at=_as_utc(task.updated_at),
         candidates=[_to_candidate(candidate) for candidate in task.candidates],

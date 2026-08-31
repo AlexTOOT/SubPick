@@ -91,3 +91,17 @@ def test_subtitle_content_identity_ignores_timing_and_ass_styles(tmp_path) -> No
 
     assert srt_identity["content_sha256"] != ass_identity["content_sha256"]
     assert srt_identity["text_fingerprint"] == ass_identity["text_fingerprint"]
+
+
+def test_subtitle_content_identity_matches_utf16_and_utf8_text(tmp_path) -> None:
+    utf8 = tmp_path / "utf8.srt"
+    utf16 = tmp_path / "utf16.srt"
+    content = "1\n00:00:01,000 --> 00:00:02,000\n你好 World\n"
+    utf8.write_text(content, encoding="utf-8")
+    utf16.write_text(content, encoding="utf-16")
+
+    utf8_identity = subtitle_content_identity(utf8)
+    utf16_identity = subtitle_content_identity(utf16)
+
+    assert utf8_identity["content_sha256"] != utf16_identity["content_sha256"]
+    assert utf8_identity["text_fingerprint"] == utf16_identity["text_fingerprint"]

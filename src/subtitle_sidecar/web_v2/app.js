@@ -834,7 +834,24 @@ function renderTasks() {
   $("#task-page-summary").textContent = `共 ${state.jobTotal} 条，第 ${state.taskPage}/${totalPages} 页`;
   $("#task-prev").disabled = state.taskPage <= 1;
   $("#task-next").disabled = state.taskPage >= totalPages;
+  $("#task-page-jump").value = String(state.taskPage);
+  $("#task-page-jump").max = String(totalPages);
   updateTaskButtons();
+}
+
+async function jumpToTaskPage() {
+  const input = $("#task-page-jump");
+  const totalPages = Math.max(1, Math.ceil(state.jobTotal / state.taskPageSize));
+  const requestedPage = Number(input.value);
+  if (!Number.isInteger(requestedPage) || requestedPage < 1 || requestedPage > totalPages) {
+    showToast(`请输入 1 到 ${totalPages} 之间的页码`, true);
+    input.focus();
+    input.select();
+    return;
+  }
+  if (requestedPage === state.taskPage) return;
+  state.taskPage = requestedPage;
+  await loadJobs();
 }
 
 function toggleTaskSelection(taskId, index, shiftKey) {
@@ -2600,8 +2617,14 @@ function bindEvents() {
     state.taskPage = 1;
     loadJobs().catch((error) => showToast(error.message, true));
   });
-  $("#task-prev").addEventListener("click", () => { state.taskPage -= 1; loadJobs(); });
-  $("#task-next").addEventListener("click", () => { state.taskPage += 1; loadJobs(); });
+  $("#task-prev").addEventListener("click", () => { state.taskPage -= 1; loadJobs().catch((error) => showToast(error.message, true)); });
+  $("#task-next").addEventListener("click", () => { state.taskPage += 1; loadJobs().catch((error) => showToast(error.message, true)); });
+  $("#task-page-go").addEventListener("click", () => jumpToTaskPage().catch((error) => showToast(error.message, true)));
+  $("#task-page-jump").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    jumpToTaskPage().catch((error) => showToast(error.message, true));
+  });
   $("#task-batch-retry").addEventListener("click", () => retryTasks([...state.selectedTasks]));
   $("#task-batch-delete").addEventListener("click", () => deleteTasks([...state.selectedTasks]));
   $("#task-delete-all").addEventListener("click", deleteAllTasks);

@@ -17,8 +17,10 @@ from subtitle_sidecar.providers.base import (
 )
 
 
-CACHE_VERSION = 1
-CACHE_TTL_SECONDS = 14 * 24 * 60 * 60
+CACHE_VERSION = 2
+# Season packs are immutable downloaded content.  By default they remain reusable
+# as long as the cached member still exists and passes the normal downstream checks.
+CACHE_TTL_SECONDS: int | None = None
 SUPPORTED_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 
 
@@ -31,7 +33,7 @@ class CachedSubtitle:
 class EpisodeBundleCache:
     """Small filesystem cache for exact episode members from multi-file subtitle packs."""
 
-    def __init__(self, data_dir: Path, *, ttl_seconds: int = CACHE_TTL_SECONDS) -> None:
+    def __init__(self, data_dir: Path, *, ttl_seconds: int | None = CACHE_TTL_SECONDS) -> None:
         self.root = Path(data_dir) / "subtitle-bundles"
         self.ttl_seconds = ttl_seconds
 
@@ -47,7 +49,10 @@ class EpisodeBundleCache:
         for entry in reversed(entries):
             if not isinstance(entry, dict) or entry.get("episode") != request.episode:
                 continue
-            if now - float(entry.get("cached_at") or 0) > self.ttl_seconds:
+            if (
+                self.ttl_seconds is not None
+                and now - float(entry.get("cached_at") or 0) > self.ttl_seconds
+            ):
                 continue
             relative_path = entry.get("path")
             if not isinstance(relative_path, str):
@@ -74,7 +79,9 @@ class EpisodeBundleCache:
                     "bundle_member_name": path.name,
                 },
             )
-            return CachedSubtitle(candidate=candidate, source_task_id=_as_int(entry.get("source_task_id")))
+            return CachedSubtitle(
+                candidate=candidate, source_task_id=_as_int(entry.get("source_task_id"))
+            )
         return None
 
     def store(
@@ -134,6 +141,8 @@ class EpisodeBundleCache:
             )
             stored += 1
         manifest["version"] = CACHE_VERSION
+        manifest["series_identity"] = _series_identity(request)
+        manifest["season"] = request.season
         manifest["entries"] = entries
         self._write_manifest(manifest_path, manifest)
         return stored
@@ -153,7 +162,7 @@ class EpisodeBundleCache:
         # Jellyfin assigns TMDb IDs to individual episodes.  A season bundle
         # must therefore be keyed by its series identifier first; otherwise
         # every episode receives an isolated cache manifest.
-        identity = request.series_id or request.tmdb_id or _normalize_title(request.title)
+        identity = _series_identity(request)
         digest = sha256(f"{identity}|s{request.season}".encode()).hexdigest()[:20]
         return self.root / digest / "manifest.json"
 
@@ -167,7 +176,9 @@ class EpisodeBundleCache:
     def _write_manifest(self, path: Path, manifest: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
         temporary.replace(path)
 
 
@@ -187,7 +198,9 @@ def select_episode_member(
     if not matches:
         raise ValueError("bundle_missing_target_episode")
     selected = _preferred_episode_member(matches, downloaded.candidate.language)
-    return DownloadedSubtitle(candidate=downloaded.candidate, path=selected.path, members=downloaded.files)
+    return DownloadedSubtitle(
+        candidate=downloaded.candidate, path=selected.path, members=downloaded.files
+    )
 
 
 def episode_from_filename(filename: str, season: int | None = None) -> int | None:
@@ -213,6 +226,10 @@ def episode_from_filename(filename: str, season: int | None = None) -> int | Non
 
 def _normalize_title(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum()) or "unknown"
+
+
+def _series_identity(request: SubtitleSearchRequest) -> str:
+    return request.series_id or request.tmdb_id or _normalize_title(request.title)
 
 
 def _safe_filename(value: str) -> str:

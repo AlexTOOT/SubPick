@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 TASK_QUEUED = "queued"
+TASK_RETRY_WAIT = "retry_wait"
 TASK_RUNNING = "running"
 TASK_RESOLVING = "resolving"
 TASK_CHECKING_EXISTING = "checking_existing"
@@ -35,6 +36,11 @@ ACTIVE_TASK_STATUSES = {
     TASK_PLACING,
 }
 
+PENDING_TASK_STATUSES = {
+    TASK_QUEUED,
+    TASK_RETRY_WAIT,
+}
+
 SUCCESS_TASK_STATUSES = {
     TASK_COMPLETED,
     TASK_SKIPPED_EXISTING_SUBTITLE,
@@ -54,7 +60,7 @@ def summarize_job_status(task_statuses: list[str]) -> str:
         return JOB_COMPLETED
 
     statuses = set(task_statuses)
-    if statuses <= {TASK_QUEUED}:
+    if statuses <= PENDING_TASK_STATUSES:
         return JOB_QUEUED
     if statuses <= SUCCESS_TASK_STATUSES:
         return JOB_COMPLETED

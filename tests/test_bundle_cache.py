@@ -1,5 +1,6 @@
-from pathlib import Path
 from dataclasses import replace
+import json
+from pathlib import Path
 
 import pytest
 
@@ -72,6 +73,39 @@ def test_selects_exact_episode_member_and_reuses_cached_bundle(tmp_path: Path) -
     assert materialized.path.read_text(encoding="utf-8") == "episode two"
 
 
+def test_default_cache_reuses_existing_member_without_age_expiry(tmp_path: Path) -> None:
+    first = tmp_path / "Ted.S02E01.zh.srt"
+    second = tmp_path / "Ted.S02E02.zh.srt"
+    first.write_text("episode one", encoding="utf-8")
+    second.write_text("episode two", encoding="utf-8")
+    downloaded = DownloadedSubtitle(
+        candidate=_candidate(),
+        path=first,
+        members=(
+            DownloadedSubtitleMember(path=first, filename=first.name),
+            DownloadedSubtitleMember(path=second, filename=second.name),
+        ),
+    )
+    cache = EpisodeBundleCache(tmp_path / "data")
+    first_request = replace(_request(1), season=2, series_id="tmdb:201834", tmdb_id="episode-1")
+    second_request = replace(_request(2), season=2, series_id="tmdb:201834", tmdb_id="episode-2")
+
+    assert cache.store(first_request, downloaded, source_task_id=32) == 2
+    manifest_path = cache._manifest_path(first_request)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for entry in manifest["entries"]:
+        entry["cached_at"] = 0
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    reused = cache.find(second_request)
+
+    assert reused is not None
+    assert reused.source_task_id == 32
+    assert manifest["version"] == 2
+    assert manifest["series_identity"] == "tmdb:201834"
+    assert manifest["season"] == 2
+
+
 def test_rejects_multi_file_bundle_without_target_episode(tmp_path: Path) -> None:
     first = tmp_path / "Show.S01E01.zh.srt"
     first.write_text("episode one", encoding="utf-8")
@@ -80,7 +114,9 @@ def test_rejects_multi_file_bundle_without_target_episode(tmp_path: Path) -> Non
         path=first,
         members=(
             DownloadedSubtitleMember(path=first, filename=first.name),
-            DownloadedSubtitleMember(path=tmp_path / "Show.S01E03.zh.srt", filename="Show.S01E03.zh.srt"),
+            DownloadedSubtitleMember(
+                path=tmp_path / "Show.S01E03.zh.srt", filename="Show.S01E03.zh.srt"
+            ),
         ),
     )
 
@@ -131,7 +167,9 @@ def test_caches_only_preferred_variant_for_each_episode(tmp_path: Path) -> None:
     assert materialized.path.read_text(encoding="utf-8") == "traditional"
 
 
-def test_prefers_matching_script_when_bundle_has_two_variants_for_one_episode(tmp_path: Path) -> None:
+def test_prefers_matching_script_when_bundle_has_two_variants_for_one_episode(
+    tmp_path: Path,
+) -> None:
     simplified = tmp_path / "Show.S01E04.简体中英.ass"
     traditional = tmp_path / "Show.S01E04.繁体中英.ass"
     simplified.write_text("simplified", encoding="utf-8")

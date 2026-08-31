@@ -213,14 +213,16 @@ def test_logs_initial_page_returns_latest_entries_in_chronological_order(token_a
         repo = Repository(session)
         events = [
             repo.record_system_event(
-                category="system",
+                category="pagination-test",
                 event="test_event",
                 message=f"event {index}",
             )
             for index in range(3)
         ]
 
-    response = token_client.get("/api/v1/logs?after_id=0&limit=2")
+    response = token_client.get(
+        "/api/v1/logs?after_id=0&limit=2&category=pagination-test"
+    )
 
     assert response.status_code == 200
     assert [entry["id"] for entry in response.json()["entries"]] == [events[1].id, events[2].id]
@@ -595,9 +597,13 @@ def test_list_jobs_returns_recent_jobs_with_task_summary(client, app):
             "id": second_task_id,
             "job_id": second_job_id,
             "status": "completed",
-            "video_path_original": "/media/Movie/B.mkv",
-            "result_subtitle_path": "/library/Movie/Movie.zh.srt",
-            "created_at": body[0]["video_tasks"][0]["created_at"],
+                "video_path_original": "/media/Movie/B.mkv",
+                "result_subtitle_path": "/library/Movie/Movie.zh.srt",
+                "retry_at": None,
+                "auto_retry_count": 0,
+                "retry_category": None,
+                "retry_parent_task_id": None,
+                "created_at": body[0]["video_tasks"][0]["created_at"],
             "updated_at": body[0]["video_tasks"][0]["updated_at"],
         }
     ]
@@ -738,6 +744,7 @@ def test_retry_task_creates_new_job_preserves_original_and_schedules_processing(
         original_task.year = 2025
         original_task.season = 1
         original_task.episode = 2
+        repo.update_video_task_status(original_task.id, "failed", "no_candidate_found")
         original_job_id = original_job.id
         original_task_id = original_task.id
 
@@ -781,6 +788,100 @@ def test_retry_task_returns_404_for_missing_task(token_client):
     assert response.json() == {"detail": "Task not found"}
 
 
+def test_retry_metadata_is_exposed_in_job_summary_and_task_detail(
+    token_app,
+    token_client,
+):
+    from datetime import datetime, timezone
+
+    retry_at = datetime(2026, 8, 31, 12, 30, tzinfo=timezone.utc)
+    with session_scope(token_app.state.engine) as session:
+        repo = Repository(session)
+        original = repo.create_job(
+            JobCreate(
+                source="moviepilot-csf",
+                raw_payload={"physical_video_file_full_path": "/media/retry.mkv"},
+                video_path_original="/media/retry.mkv",
+            )
+        ).video_tasks[0]
+        original.status = "failed"
+        child = repo.create_retry_child(
+            original,
+            source="auto-retry",
+            status="retry_wait",
+            retry_at=retry_at,
+            auto_retry_count=2,
+            retry_category="provider_network",
+        )
+        child_id = child.id
+        parent_id = original.id
+
+    jobs = token_client.get("/api/v1/jobs").json()
+    summary = next(
+        task
+        for job in jobs
+        for task in job["video_tasks"]
+        if task["id"] == child_id
+    )
+    detail = token_client.get(f"/api/v1/tasks/{child_id}").json()
+
+    for payload in (summary, detail):
+        assert payload["retry_at"] == "2026-08-31T12:30:00Z"
+        assert payload["auto_retry_count"] == 2
+        assert payload["retry_category"] == "provider_network"
+        assert payload["retry_parent_task_id"] == parent_id
+
+
+def test_manual_retry_replaces_delayed_auto_retry_and_duplicate_request_is_idempotent(
+    token_app,
+    token_client,
+):
+    from datetime import datetime, timezone
+
+    enqueued: list[int] = []
+    token_app.state.enqueue_task = enqueued.append
+    with session_scope(token_app.state.engine) as session:
+        repo = Repository(session)
+        original = repo.create_job(
+            JobCreate(
+                source="moviepilot-csf",
+                raw_payload={"physical_video_file_full_path": "/media/manual-now.mkv"},
+                video_path_original="/media/manual-now.mkv",
+            )
+        ).video_tasks[0]
+        original.status = "failed"
+        original.error_message = "no_candidate_found"
+        delayed = repo.create_retry_child(
+            original,
+            source="auto-retry",
+            status="retry_wait",
+            retry_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            auto_retry_count=1,
+            retry_category="no_candidate",
+        )
+        original_id = original.id
+        delayed_id = delayed.id
+
+    first = token_client.post(f"/api/v1/tasks/{original_id}/retry")
+    second = token_client.post(f"/api/v1/tasks/{original_id}/retry")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    manual_id = first.json()["task_id"]
+    assert manual_id != delayed_id
+    assert enqueued == [manual_id]
+    with session_scope(token_app.state.engine) as session:
+        repo = Repository(session)
+        delayed = repo.get_video_task(delayed_id)
+        manual = repo.get_video_task(manual_id)
+        assert delayed is not None
+        assert delayed.status == "skipped_existing_subtitle"
+        assert delayed.retry_at is None
+        assert manual is not None
+        assert manual.auto_retry_count == 0
+        assert manual.job.source == "manual-retry"
+
+
 def test_batch_retry_reports_per_task_results_and_enqueues_created_tasks(token_app, token_client):
     enqueued_task_ids: list[int] = []
     token_app.state.enqueue_task = enqueued_task_ids.append
@@ -805,6 +906,8 @@ def test_batch_retry_reports_per_task_results_and_enqueues_created_tasks(token_a
         )
         first_task_id = first_job.video_tasks[0].id
         second_task_id = second_job.video_tasks[0].id
+        repo.update_video_task_status(first_task_id, "failed", "no_candidate_found")
+        repo.update_video_task_status(second_task_id, "failed", "no_candidate_found")
 
     response = token_client.post(
         "/api/v1/tasks/batch-retry",

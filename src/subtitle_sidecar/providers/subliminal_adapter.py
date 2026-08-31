@@ -5,6 +5,7 @@ from importlib import import_module
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+import unicodedata
 
 from dogpile.cache.exception import RegionNotConfigured
 from subliminal.core import ProviderPool
@@ -51,6 +52,24 @@ TRADITIONAL_LANGUAGE_ALIASES = {
     "zh-hant",
     "zht",
 }
+
+OPENSUBTITLESCOM_METADATA_ATTRIBUTES = (
+    ("subtitle_id", "id"),
+    ("movie_kind", "movie_kind"),
+    ("movie_title", "movie_title"),
+    ("movie_full_name", "movie_full_name"),
+    ("movie_year", "movie_year"),
+    ("movie_imdb_id", "movie_imdb_id"),
+    ("movie_tmdb_id", "movie_tmdb_id"),
+    ("series_title", "series_title"),
+    ("series_season", "series_season"),
+    ("series_episode", "series_episode"),
+    ("series_imdb_id", "series_imdb_id"),
+    ("series_tmdb_id", "series_tmdb_id"),
+    ("file_id", "file_id"),
+    ("file_name", "file_name"),
+    ("release", "release"),
+)
 
 
 def _supported_provider_languages(provider: str, plugin: Any, languages: set[Any]) -> set[Any]:
@@ -179,6 +198,11 @@ class SubliminalProvider:
                 provider_candidates = [
                     self._to_candidate(request, subtitle, report_provider)
                     for subtitle in subtitles
+                    if self._candidate_matches_request(
+                        request,
+                        subtitle,
+                        provider_name=provider_name,
+                    )
                 ]
             except Exception as error:
                 self._emit_report(
@@ -411,6 +435,15 @@ class SubliminalProvider:
         title = self._title_for(subtitle, request.title)
         source_url = _optional_text(getattr(subtitle, "page_link", ""))
         release_info = _optional_text(getattr(subtitle, "release_info", "")) or title
+        raw_metadata: dict[str, Any] = {
+            "subtitle": subtitle,
+            "metadata": metadata,
+            "internal_provider": provider_name.removeprefix("subliminal:"),
+        }
+        if provider_name == "subliminal:opensubtitlescom":
+            subtitle_id = metadata.get("subtitle_id")
+            if subtitle_id is not None:
+                raw_metadata["opensubtitlescom_id"] = subtitle_id
         return SubtitleCandidate(
             provider=provider_name,
             language=self._normalize_language(getattr(subtitle, "language", "")),
@@ -420,18 +453,68 @@ class SubliminalProvider:
             source_url=source_url,
             release_info=release_info,
             confidence=self._confidence_for(subtitle),
-            raw_metadata={
-                "subtitle": subtitle,
-                "metadata": metadata,
-                "internal_provider": provider_name.removeprefix("subliminal:"),
-            },
+            raw_metadata=raw_metadata,
         )
 
     def _metadata_for(self, subtitle: Any) -> dict[str, Any]:
         metadata = getattr(subtitle, "metadata", {})
-        if isinstance(metadata, dict):
-            return metadata
-        return {}
+        result = dict(metadata) if isinstance(metadata, dict) else {}
+        if str(getattr(subtitle, "provider_name", "") or "").casefold() != "opensubtitlescom":
+            return result
+        for key, attribute in OPENSUBTITLESCOM_METADATA_ATTRIBUTES:
+            value = _serializable_scalar(getattr(subtitle, attribute, None))
+            if value is not None and value != "":
+                result[key] = value
+        return result
+
+    def _candidate_matches_request(
+        self,
+        request: SubtitleSearchRequest,
+        subtitle: Any,
+        *,
+        provider_name: str,
+    ) -> bool:
+        if request.media_type != "episode" or provider_name != "opensubtitlescom":
+            return True
+
+        metadata = self._metadata_for(subtitle)
+        movie_kind = _normalized_identity_text(metadata.get("movie_kind"))
+        if movie_kind and movie_kind != "episode":
+            return False
+
+        candidate_season = _optional_int(metadata.get("series_season"))
+        candidate_episode = _optional_int(metadata.get("series_episode"))
+        # An episode candidate must prove the complete coordinate. A generic title or
+        # season pack is not safe evidence for a particular episode download.
+        if candidate_season is None or candidate_episode is None:
+            return False
+        if candidate_season != request.season or candidate_episode != request.episode:
+            return False
+
+        expected_ids = _request_series_ids(request)
+        has_matching_id = False
+        for provider, key in (
+            ("imdb", "series_imdb_id"),
+            ("tmdb", "series_tmdb_id"),
+        ):
+            candidate_id = _normalized_provider_id(metadata.get(key), provider=provider)
+            expected_id = expected_ids.get(provider)
+            if candidate_id and expected_id and candidate_id != expected_id:
+                return False
+            if candidate_id and expected_id:
+                has_matching_id = True
+        if has_matching_id:
+            return True
+
+        series_title = _normalized_identity_text(metadata.get("series_title"))
+        if not series_title:
+            return False
+        expected_titles = {
+            normalized
+            for value in (request.title, request.original_title)
+            if (normalized := _normalized_identity_text(value))
+        }
+        return series_title in expected_titles
 
     def _title_for(self, subtitle: Any, fallback: str) -> str:
         for attribute in ("title", "release_info", "page_link"):
@@ -474,6 +557,51 @@ def _duration_ms(started_at: float) -> int:
 
 def _optional_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def _serializable_scalar(value: Any) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value).strip() or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _normalized_identity_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _normalized_provider_id(value: Any, *, provider: str) -> str:
+    normalized = str(value or "").strip().casefold()
+    if provider == "imdb":
+        normalized = normalized.removeprefix("imdb:")
+        if normalized and not normalized.startswith("tt") and normalized.isdigit():
+            normalized = f"tt{normalized}"
+    elif provider == "tmdb":
+        normalized = normalized.removeprefix("tmdb:")
+    return normalized
+
+
+def _request_series_ids(request: SubtitleSearchRequest) -> dict[str, str]:
+    values = {
+        "imdb": _normalized_provider_id(request.imdb_id, provider="imdb"),
+        "tmdb": _normalized_provider_id(request.tmdb_id, provider="tmdb"),
+    }
+    series_id = str(request.series_id or "").strip()
+    provider, separator, value = series_id.partition(":")
+    provider = provider.casefold()
+    if separator and provider in values and not values[provider]:
+        values[provider] = _normalized_provider_id(value, provider=provider)
+    return {provider: value for provider, value in values.items() if value}
 
 
 def _ensure_subliminal_cache() -> None:
