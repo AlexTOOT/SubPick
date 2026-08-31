@@ -213,14 +213,16 @@ def test_logs_initial_page_returns_latest_entries_in_chronological_order(token_a
         repo = Repository(session)
         events = [
             repo.record_system_event(
-                category="system",
+                category="pagination-test",
                 event="test_event",
                 message=f"event {index}",
             )
             for index in range(3)
         ]
 
-    response = token_client.get("/api/v1/logs?after_id=0&limit=2")
+    response = token_client.get(
+        "/api/v1/logs?after_id=0&limit=2&category=pagination-test"
+    )
 
     assert response.status_code == 200
     assert [entry["id"] for entry in response.json()["entries"]] == [events[1].id, events[2].id]
