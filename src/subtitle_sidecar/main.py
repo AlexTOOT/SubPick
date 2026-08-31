@@ -179,14 +179,13 @@ def _record_provider_health(
 ) -> None:
     with session_scope(engine) as session:
         repo = Repository(session)
-        metadata = repo.get_setting(RUNTIME_METADATA_SETTING_KEY) or {}
-        metadata.update(
+        repo.patch_setting(
+            RUNTIME_METADATA_SETTING_KEY,
             {
                 f"{name}_last_check_status": status,
                 f"{name}_last_checked_at": datetime.now(UTC).isoformat(),
-            }
+            },
         )
-        repo.set_setting(RUNTIME_METADATA_SETTING_KEY, metadata)
         repo.record_system_event(
             category="provider",
             event="provider_health_checked",

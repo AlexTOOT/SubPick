@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import String, delete, func, or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, selectinload
 
 from subtitle_sidecar.observability import emit_structured_log
@@ -121,6 +122,40 @@ class Repository:
             self.session.add(setting)
         else:
             setting.value_json = _json_safe(value)
+        self.session.flush()
+        return setting
+
+    def patch_setting(self, key: str, values: dict[str, Any]) -> AppSetting:
+        """Atomically merge top-level setting fields without replacing concurrent writes."""
+        safe_values = _json_safe(values)
+        bind = self.session.get_bind()
+        if bind.dialect.name == "sqlite":
+            statement = sqlite_insert(AppSetting).values(key=key, value_json=safe_values)
+            statement = statement.on_conflict_do_update(
+                index_elements=[AppSetting.key],
+                set_={
+                    "value_json": func.json_patch(
+                        AppSetting.value_json,
+                        statement.excluded.value_json,
+                    ),
+                    "updated_at": func.now(),
+                },
+            )
+            self.session.execute(statement)
+            self.session.flush()
+            self.session.expire_all()
+            setting = self.session.get(AppSetting, key)
+            assert setting is not None
+            return setting
+
+        setting = self.session.scalar(
+            select(AppSetting).where(AppSetting.key == key).with_for_update()
+        )
+        if setting is None:
+            setting = AppSetting(key=key, value_json=safe_values)
+            self.session.add(setting)
+        else:
+            setting.value_json = {**dict(setting.value_json), **safe_values}
         self.session.flush()
         return setting
 

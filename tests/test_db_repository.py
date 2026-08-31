@@ -5,6 +5,36 @@ from subtitle_sidecar.db.repository import JellyfinMediaItemData, JobCreate, Rep
 from subtitle_sidecar.db.session import create_sqlite_engine, create_tables, session_scope
 
 
+def test_patch_setting_preserves_unrelated_fields(tmp_path) -> None:
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    create_tables(engine)
+
+    with session_scope(engine) as session:
+        repo = Repository(session)
+        repo.set_setting(
+            "runtime_metadata",
+            {
+                "setup_wizard_dismissed": True,
+                "moviepilot_path_issue": {"received_path": "/mp/media/Movie.mkv"},
+            },
+        )
+
+    with session_scope(engine) as session:
+        patched = Repository(session).patch_setting(
+            "runtime_metadata",
+            {
+                "zimuku_last_check_status": "failed",
+                "zimuku_last_checked_at": "2026-08-31T00:00:00+00:00",
+            },
+        )
+        assert patched.value_json == {
+            "setup_wizard_dismissed": True,
+            "moviepilot_path_issue": {"received_path": "/mp/media/Movie.mkv"},
+            "zimuku_last_check_status": "failed",
+            "zimuku_last_checked_at": "2026-08-31T00:00:00+00:00",
+        }
+
+
 def test_create_job_and_video_task(tmp_path) -> None:
     engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
     create_tables(engine)
